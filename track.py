@@ -1,11 +1,19 @@
 #!/usr/local/bin/python
-
+"""
+Created on Fri Sep  25 19:42:41 2015
+Name:    track.py
+Purpose: Track Drosphila larvae and analyze bahavior.
+Author:  Andrea Vaccari (av9g@virginia.edu)
+"""
 import cv2
 import argparse
 import numpy as np
 import Tkinter as tk
 import tkFileDialog as tkfd
 import tkMessageBox as tkmb
+import matplotlib.pyplot as plt
+from os.path import splitext, basename
+import csv
 
 
 
@@ -78,9 +86,6 @@ def tubes(img, sigma_rng):
 
 
 
-
-
-
 class trackedArea(object):
     def __init__(self, corners):
         if corners[0][0] < corners[1][0]:
@@ -99,12 +104,17 @@ class trackedArea(object):
         corn = []
         corn.append((self.c, self.r))
         corn.append((self.c + self.w, self.r + self.h))
-        self.Corners = np.asarray(corn)
+        self.corners = np.asarray(corn)
+
+        self.initLoc = np.array((self.c, self.r))
+        self.location = np.array((self.c, self.r))
+        self.deltaLoc = None
 
         self.templ = None
         self.templStack = None
         self.templCnt = None
-        self.StackSize = None
+        self.templWeights = None
+        self.stackSize = None
 
 
     def initKalman(self):
@@ -132,17 +142,17 @@ class trackedArea(object):
         self.kf.correct(loc)
 
     def setStackSize(self, size):
-        self.StackSize = size
+        self.stackSize = size
 
     def getCorners(self):
-        return [tuple(self.Corners[0]), tuple(self.Corners[1])]
+        return [tuple(self.corners[0]), tuple(self.corners[1])]
 
     def getHalfCorners(self):
-        corn = self.Corners - (self.w/2, self.h/2)
+        corn = self.corners - (self.w/2, self.h/2)
         return [tuple(corn[0]), tuple(corn[1])]
 
     def getEnlargedCorners(self, pxls):
-        corn = self.Corners - (self.w/2, self.h/2)
+        corn = self.corners - (self.w/2, self.h/2)
         corn += np.asarray([[-pxls, -pxls], [pxls, pxls]])
         return [tuple(corn[0]), tuple(corn[1])]
 
@@ -154,23 +164,39 @@ class trackedArea(object):
         self.r = window[1]
         self.w = window[2]
         self.h = window[3]
+        self.setLocation((self.c, self.r))
 
     def updateWindow(self, loc):
         self.c = loc[0]
         self.r = loc[1]
+        self.setLocation((self.c, self.r))
         corn = []
         corn.append((self.c, self.r))
         corn.append((self.c + self.w, self.r + self.h))
-        self.Corners = np.asarray(corn)
+        self.corners = np.asarray(corn)
+
+    def setLocation(self, loc):
+        delta = np.asarray(loc) - self.initLoc
+        self.deltaLoc = np.sqrt(np.inner(delta, delta))
+        self.location = np.asarray(loc)
+
+    def getLocation(self):
+        return self.location
+
+    def getInitLoc(self):
+        return self.initLoc
+
+    def getDeltaLoc(self):
+        return self.deltaLoc
 
     def setTemplate(self, image):
         self.templ = image[self.r:self.r+self.h, self.c:self.c+self.w].copy()
 
         if self.templCnt is None:
             self.templCnt = 0
-            self.templStack = np.concatenate([self.templ[..., np.newaxis] for i in range(self.StackSize)], axis=3)
+            self.templStack = np.concatenate([self.templ[..., np.newaxis] for i in range(self.stackSize)], axis=3)
 
-        self.templCnt %= self.StackSize
+        self.templCnt %= (self.stackSize - 1)
         self.templStack[:, :, :, self.templCnt] = self.templ
         self.templCnt += 1
 
@@ -178,12 +204,22 @@ class trackedArea(object):
         ave = self.getStackAve()
         return cv2.cvtColor(ave, cv2.COLOR_BGR2GRAY)
 
+    def getStack(self):
+        stack = np.concatenate([self.templStack[..., i] for i in range(self.stackSize)], axis=1)
+        return np.concatenate((self.getStackAve(), stack), axis=1)
+
     def getStackAve(self):
-        ave = np.average(self.templStack, 3).astype(np.uint8)
+        self.templWeights = 0.5 * np.ones(self.stackSize)
+        self.templWeights[self.templCnt] = 1.0
+        ave = np.average(self.templStack, axis=3, weights=self.templWeights).astype(np.uint8)
         return ave
 
     def getGrayTemplate(self):
         return cv2.cvtColor(self.templ, cv2.COLOR_BGR2GRAY)
+
+    def dist(self, other):
+        diff = self.location - other.location
+        return np.sqrt(np.inner(diff, diff))
 
 
 
@@ -196,9 +232,14 @@ class watch(object):
             root.iconify()
             vid = tkfd.askopenfilename()
 
-        self.showHelp('main')
+        if vid is '':
+            exit()
+        else:
+            self.vid = vid
 
-        self.cap = cv2.VideoCapture(vid)
+        self.showHelp('instructions')
+
+        self.cap = cv2.VideoCapture(self.vid)
 
         self.sourceFrame = None
         self.processedFrame = None
@@ -208,7 +249,7 @@ class watch(object):
         self.lastFrame = False
         self.userInteraction = False
 
-        self.mainWindow = 'Larvae'
+        self.mainWindow = basename(self.vid)
         cv2.namedWindow(self.mainWindow)
 
         self.selectionWindow = 'Select areas to track'
@@ -217,21 +258,42 @@ class watch(object):
         self.tracking = False
         self.trackedAreasList = []
         self.showMatch = False
+        self.showTemplate = False
+        self.trackDump = None
+
+        self.pause = False
+
+        self.distPlot = None
+        self.plotLength = 600
+        self.driftMax = 1
+        self.distMax = 1
+
+
 
     def showHelp(self, menu):
         if menu == 'main':
             message = "Active keys:\n" + \
                       "'a' -> selects areas to track (Click, drag, release)\n" + \
-                      "'m' -> toggles the display of the current template and the matching results (for trubleshooting)\n" + \
+                      "'p' -> pause/run the video\n" + \
+                      "'t' -> toggles the display of the current template\n" + \
+                      "'m' -> toggles the display of the current matching\n" + \
                       "'h' -> shows this help\n" + \
                       "\n'q' -> quits"
         elif menu == 'select':
-            message = "Select area keys:\n" + \
+            message = "To select an area, click, drag, and release.\n" + \
+                      "Select area keys:\n" + \
                       "'l' -> clear last selection\n" + \
                       "'c' -> clear all selections\n" + \
                       "'t' -> start tracking\n" + \
                       "'h' -> shows this help\n" + \
                       "\n'q' -> quits selection"
+        elif menu == 'instructions':
+            message = "The video will start paused. Push 'p' to run." + \
+                      "To perform an analysis:\n" + \
+                      "1. Push 'a' to switch to selection mode\n" + \
+                      "2. Select the end section of the larva at the center.\n" + \
+                      "3. Select the end sections of the larvae to the left and the right.\n" + \
+                      "\n'h' -> context specific help"
         else:
             message = "You shouldn't be here!"
 
@@ -252,7 +314,7 @@ class watch(object):
                     area = trackedArea(self.refPt)
                     area.setStackSize(30)
                     area.setTemplate(self.processedFrame)
-                    area.initKalman()
+#                    area.initKalman()
                     corn = area.getCorners()
                     self.trackedAreasList.append(area)
 
@@ -295,11 +357,12 @@ class watch(object):
                 self.undoFrames = []
                 self.trackArea = self.refPt
                 self.tracking = True
+                self.trackDump = []
+                if self.pause is True:
+                    self.pause = False
                 break
             elif key == ord('h'):
                 self.showHelp('select')
-
-
 
         cv2.destroyWindow(self.selectionWindow)
         self.userInteration = False
@@ -318,19 +381,20 @@ class watch(object):
 
 
 
+
     def trackObjects(self):
         for area in self.trackedAreasList:
-#                area = self.trackedAreasList[0]
-
+            # Template matching
             gray = cv2.cvtColor(self.processedFrame, cv2.COLOR_BGR2GRAY)
-#            templ = area.getGrayTemplate()
             templ = area.getGrayStackAve()
             cc = cv2.matchTemplate(gray, templ, cv2.TM_CCOEFF_NORMED)
             cc = cc * cc * cc * cc
             _, cc = cv2.threshold(cc, 0.1, 0, cv2.THRESH_TOZERO)
             cc8 = cv2.normalize(cc, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
             mask = np.zeros_like(cc8)
-            mcorn = area.getEnlargedCorners(0)
+
+            # Search match within template region
+            mcorn = area.getEnlargedCorners(0) # If not 0, enalrge the search
             cv2.rectangle(mask, mcorn[0], mcorn[1], 255, -1)
             _, _, _, mx = cv2.minMaxLoc(cc8, mask)
 
@@ -338,26 +402,38 @@ class watch(object):
 #            area.updateWindow(kp)
 #            area.setTemplate(self.processedFrame)
 
+            # Prevent large spatial jumps
             (c, r, _, _) = area.getcrwh()
             jump = 10
             if abs(c - mx[0]) < jump and abs(r - mx[1]) < jump:
 #                area.setKalmanCorrect(mx)
                 area.updateWindow(mx)
-                area.setTemplate(self.processedFrame)
+            else:
+#                area.setKalmanCorrect((c, r))
+                area.updateWindow((c, r))
+            area.setTemplate(self.processedFrame)
 
+            # Show the template stack
+            if self.showTemplate is True:
+                cv2.imshow('Stack: '+str(area), area.getStack())
+            else:
+                try:
+                    cv2.destroyWindow('Stack: '+str(area))
+                except:
+                    pass
+
+            # Show the matching results
             if self.showMatch is True:
-                cv2.imshow('Stack: '+str(area), templ)
                 cv2.rectangle(cc8, mcorn[0], mcorn[1], 255, 1)
                 cv2.circle(cc8, mx, 5, 255, 1)
                 cv2.imshow('Match: '+str(area), cc8)
             else:
                 try:
                     cv2.destroyWindow('Match: '+str(area))
-                    cv2.destroyWindow('Stack: '+str(area))
                 except:
                     pass
 
-
+            # Draw the tracked area on the image
             corn = area.getCorners()
             cv2.rectangle(self.workingFrame,
                           corn[0], corn[1],
@@ -367,18 +443,96 @@ class watch(object):
 #            raw_input('wait')
 
 
+    def showBehavior(self):
+        idx = self.frameNo % self.plotLength
+
+        dump = [self.frameNo]  # Store line for CSV file
+
+        # Plot drift from original position for all larvae
+        drift = []
+        for area in self.trackedAreasList:
+            drift.append(area.getDeltaLoc())
+            start = area.getInitLoc()
+            stop = area.getLocation()
+            dump.extend(stop)
+            cv2.line(self.workingFrame, tuple(start), tuple(stop), (255,0, 0))
+        dump.extend(drift)
+        drift = np.asarray(drift)
+
+        for i in range(len(drift)):
+            try:
+                plt.subplot(2, 1, 1)
+                data = self.driftPlot[i].get_ydata()
+            except (AttributeError, TypeError):
+                x = np.arange(0, self.plotLength)
+                y = np.zeros((self.plotLength, len(drift)))
+                self.driftPlot = plt.plot(x, y)
+                plt.title('Drift from starting position')
+                plt.ylabel('Drift (pixels)')
+                plt.tick_params(axis='x', labelbottom='off')
+                plt.ion()
+                plt.show()
+            data = self.driftPlot[i].get_ydata()
+            data[idx] = drift[i]
+            self.driftPlot[i].set_ydata(data)
+        if drift.max() > self.driftMax:
+            self.driftMax = drift.max()
+        plt.ylim([0, self.driftMax])
+
+        # Plot distance from first selected larva
+        dist = []
+        mainArea = self.trackedAreasList[0]
+        stop = tuple(mainArea.getLocation())
+        for area in self.trackedAreasList:
+            dist.append(area.dist(mainArea))
+            start = tuple(area.getLocation())
+            cv2.line(self.workingFrame, start, stop, (255,0, 0))
+        dump.extend(dist)
+        dist = np.asarray(dist)
+
+        for i in range(len(dist)):
+            try:
+                plt.subplot(2, 1, 2)
+                data = self.distPlot[i].get_ydata()
+            except (AttributeError, TypeError):
+                x = np.arange(0, self.plotLength)
+                y = np.zeros((self.plotLength, len(dist)))
+                self.distPlot = plt.plot(x, y)
+                plt.title('Distance from main larva')
+                plt.xlabel('Frame')
+                plt.ylabel('Distance (pixels)')
+                plt.ion()
+                plt.show()
+            data = self.distPlot[i].get_ydata()
+            data[idx] = dist[i]
+            self.distPlot[i].set_ydata(data)
+        if dist.max() > self.distMax:
+            self.distMax = dist.max()
+        plt.ylim([0, self.distMax])
+
+        plt.draw()
+
+        # Add to track dump for CSV file
+        self.trackDump.append(dump)
+
+
+
+
+
 
     def processFrame(self):
+        # Frangi vesselness to highlight tubuar structures
         gray = cv2.cvtColor(self.sourceFrame, cv2.COLOR_BGR2GRAY)
-
         tub = tubes(gray, [5, 12])
         tubular = cv2.cvtColor(tub, cv2.COLOR_GRAY2BGR)
 
+        # Merge with original to ennhance tubular structures
         high = 0.3
         rest = 1.0 - high
         colorized = cv2.addWeighted(self.sourceFrame, rest, tubular, high, 0.0)
 #        colorized = cv2.add(self.sourceFrame, tubular)
 
+        # Tile horizontally
         self.processedFrame = np.concatenate((self.sourceFrame,
                                               tubular,
                                               colorized),
@@ -386,9 +540,10 @@ class watch(object):
 
         self.workingFrame = self.processedFrame.copy()
 
+        # If we are tracking, track and show analysis
         if self.tracking is True:
             self.trackObjects()
-
+            self.showBehavior()
 
 
     def showFrame(self, window, frame):
@@ -400,27 +555,54 @@ class watch(object):
     def watch(self):
         while self.lastFrame is False:
             key = cv2.waitKey(1) & 0xFF
-            if key == ord('m'):
+            if key == ord('t'):
+                self.showTemplate = not self.showTemplate
+            elif key == ord('m'):
                 self.showMatch = not self.showMatch
-            if key == ord('q'):
+            elif key == ord('q'):
                 break
             elif key == ord('a'):
                 self.selectArea()
             elif key == ord('h'):
                 self.showHelp('main')
+            elif key == ord('p'):
+                self.pause = not self.pause
             else:
-                self.readFrame()
-                self.processFrame()
-                self.showFrame(self.mainWindow, self.workingFrame)
+                if not self.pause:
+                    self.readFrame()
+                    self.processFrame()
+                    self.showFrame(self.mainWindow, self.workingFrame)
+                if self.frameNo == 1:
+                    self.pause = True
 
-        exit()
+        # If any, dump tracking data to file
+        if self.trackDump is not None:
+            (fileName, _) = splitext(self.vid)
+            no = len(self.trackedAreasList)
+            header1 = [['Larva-' + str(i), ''] for i in range(no)]
+            header1 = [''] + [i for sub in header1 for i in sub]
+            header1.extend(['Larva-' + str(i) for i in range(no)] * 2)
+            header2 = ['frame'] + ['x', 'y'] * no + ['drift'] * no + ['distance'] * no
+            with open(fileName + '.csv', 'w') as csvFile:
+                dump = csv.writer(csvFile)
+                dump.writerow(header1)
+                dump.writerow(header2)
+                dump.writerows(self.trackDump)
 
 
 
+    def __enter__(self):
+        return self
 
-    def __del__(self):
-        self.cap.release()
+
+
+    def __exit__(self, exec_type, exec_value, traceback):
+        try:
+            self.cap.release()
+        except AttributeError:
+            pass
         cv2.destroyAllWindows()
+        plt.close('all')
 
 
 
@@ -434,6 +616,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    watch = watch(args.file)
-    watch.watch()
+    with watch(args.file) as watch:
+        watch.watch()
 
