@@ -5,6 +5,8 @@ Name:    track.py
 Purpose: Track Drosphila larvae and analyze bahavior.
 Author:  Andrea Vaccari (av9g@virginia.edu)
 """
+
+
 import cv2
 import argparse
 import numpy as np
@@ -233,7 +235,7 @@ class watch(object):
             vid = tkfd.askopenfilename()
 
         if vid is '':
-            exit()
+            raise IOError
         else:
             self.vid = vid
 
@@ -591,6 +593,7 @@ class watch(object):
 
 
 
+
     def __enter__(self):
         return self
 
@@ -616,6 +619,15 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    with watch(args.file) as watch:
-        watch.watch()
+    again = True
 
+    while again is True:
+        try:
+            with watch(args.file) as watch:
+                watch.watch()
+        except IOError:
+            pass
+
+        # Do you want to analyze another file?
+        again = tkmb.askyesno("Analyze another?",
+                              "Do you want to open another file?")
