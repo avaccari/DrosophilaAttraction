@@ -309,6 +309,8 @@ class watch(object):
         if self.userInteraction is True:
             if event == cv2.EVENT_LBUTTONDOWN:
                 self.refPt = [(x, y)]
+                self.workingFrame[y, x] = [0, 0, 255]
+                self.showFrame(self.selectionWindow, self.workingFrame)
             elif event == cv2.EVENT_LBUTTONUP:
                 self.undoFrames.append(self.workingFrame.copy())
                 self.refPt.append((x, y))
@@ -623,10 +625,11 @@ if __name__ == '__main__':
 
     while again is True:
         try:
-            with watch(args.file) as watch:
-                watch.watch()
+            with watch(args.file) as w:
+                w.watch()
         except IOError:
             pass
+
 
         # Do you want to analyze another file?
         again = tkmb.askyesno("Analyze another?",
