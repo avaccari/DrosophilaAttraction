@@ -6,6 +6,20 @@ Purpose: Track Drosphila larvae and analyze bahavior.
 Author:  Andrea Vaccari (av9g@virginia.edu)
 """
 
+"""
+TODO:
+- verify if y is the best direction to account (maybe projection on direction
+  perpendicular to best linear fit to top left corners of selected larvae)
+- evaluate movement along that direction
+- smooth out noise
+- detect max and min
+- evaluate each period
+- evaluate delays within period
+- evaluate average period
+- evaluate displacements for each period
+- evaluate average displacement
+"""
+
 
 import cv2
 import argparse
@@ -16,9 +30,6 @@ import tkMessageBox as tkmb
 import matplotlib.pyplot as plt
 from os.path import splitext, basename
 import csv
-
-
-
 
 
 def sorteva(eva):
@@ -243,6 +254,8 @@ class watch(object):
 
         self.cap = cv2.VideoCapture(self.vid)
 
+        self.enhance = False
+
         self.sourceFrame = None
         self.processedFrame = None
         self.workingFrame = None
@@ -276,6 +289,7 @@ class watch(object):
         if menu == 'main':
             message = "Active keys:\n" + \
                       "'a' -> selects areas to track (Click, drag, release)\n" + \
+                      "'e' -> toggle video enhancement\n" + \
                       "'p' -> pause/run the video\n" + \
                       "'t' -> toggles the display of the current template\n" + \
                       "'m' -> toggles the display of the current matching\n" + \
@@ -452,7 +466,7 @@ class watch(object):
 
         dump = [self.frameNo]  # Store line for CSV file
 
-        # Plot drift from original position for all larvae
+        # Draw drift from original position
         drift = []
         for area in self.trackedAreasList:
             drift.append(area.getDeltaLoc())
@@ -460,9 +474,10 @@ class watch(object):
             stop = area.getLocation()
             dump.extend(stop)
             cv2.line(self.workingFrame, tuple(start), tuple(stop), (255,0, 0))
-        dump.extend(drift)
+        dump.extend(drift)  # Add (x, y) drift to CSV
         drift = np.asarray(drift)
 
+        # Create and update drift plot
         for i in range(len(drift)):
             try:
                 plt.subplot(2, 1, 1)
@@ -483,7 +498,7 @@ class watch(object):
             self.driftMax = drift.max()
         plt.ylim([0, self.driftMax])
 
-        # Plot distance from first selected larva
+        # Draw distance from first selected larva
         dist = []
         mainArea = self.trackedAreasList[0]
         stop = tuple(mainArea.getLocation())
@@ -491,9 +506,10 @@ class watch(object):
             dist.append(area.dist(mainArea))
             start = tuple(area.getLocation())
             cv2.line(self.workingFrame, start, stop, (255,0, 0))
-        dump.extend(dist)
+        dump.extend(dist)  # Add distance to CSV
         dist = np.asarray(dist)
 
+        # Create and update distane plot
         for i in range(len(dist)):
             try:
                 plt.subplot(2, 1, 2)
@@ -525,22 +541,26 @@ class watch(object):
 
 
     def processFrame(self):
-        # Frangi vesselness to highlight tubuar structures
-        gray = cv2.cvtColor(self.sourceFrame, cv2.COLOR_BGR2GRAY)
-        tub = tubes(gray, [5, 12])
-        tubular = cv2.cvtColor(tub, cv2.COLOR_GRAY2BGR)
+        # If we are enhancing the image
+        if self.enhance:
+            # Frangi vesselness to highlight tubuar structures
+            gray = cv2.cvtColor(self.sourceFrame, cv2.COLOR_BGR2GRAY)
+            tub = tubes(gray, [5, 12])
+            tubular = cv2.cvtColor(tub, cv2.COLOR_GRAY2BGR)
 
-        # Merge with original to ennhance tubular structures
-        high = 0.3
-        rest = 1.0 - high
-        colorized = cv2.addWeighted(self.sourceFrame, rest, tubular, high, 0.0)
-#        colorized = cv2.add(self.sourceFrame, tubular)
+            # Merge with original to ennhance tubular structures
+            high = 0.3
+            rest = 1.0 - high
+            colorized = cv2.addWeighted(self.sourceFrame, rest, tubular, high, 0.0)
+    #        colorized = cv2.add(self.sourceFrame, tubular)
 
-        # Tile horizontally
-        self.processedFrame = np.concatenate((self.sourceFrame,
-                                              tubular,
-                                              colorized),
-                                             axis=1)
+            # Tile horizontally
+            self.processedFrame = np.concatenate((self.sourceFrame,
+                                                  tubular,
+                                                  colorized),
+                                                 axis=1)
+        else:
+            self.processedFrame = self.sourceFrame;
 
         self.workingFrame = self.processedFrame.copy()
 
@@ -563,6 +583,10 @@ class watch(object):
                 self.showTemplate = not self.showTemplate
             elif key == ord('m'):
                 self.showMatch = not self.showMatch
+            elif key == ord('e'):
+                self.enhance = not self.enhance
+                self.processFrame()
+                self.showFrame(self.mainWindow, self.workingFrame)
             elif key == ord('q'):
                 break
             elif key == ord('a'):
@@ -629,7 +653,6 @@ if __name__ == '__main__':
                 w.watch()
         except IOError:
             pass
-
 
         # Do you want to analyze another file?
         again = tkmb.askyesno("Analyze another?",
