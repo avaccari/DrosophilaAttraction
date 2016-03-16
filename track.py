@@ -498,9 +498,6 @@ class watch(object):
             else:
                 data[idx] = drift[i]
                 self.driftPlot[i].set_ydata(data)
-            finally:
-                plt.show()
-
 
         if drift.max() > self.driftMax:
             self.driftMax = drift.max()
@@ -532,14 +529,14 @@ class watch(object):
             else:
                 data[idx] = dist[i]
                 self.distPlot[i].set_ydata(data)
-            finally:
-                plt.show()
 
         if dist.max() > self.distMax:
             self.distMax = dist.max()
         plt.ylim([0, self.distMax])
 
+        plt.show()
         plt.draw()
+        plt.pause(0.001)
 
         # Add to track dump for CSV file
         self.trackDump.append(dump)
@@ -626,7 +623,7 @@ class watch(object):
                 dump.writerow(header2)
                 dump.writerows(self.trackDump)
 
-
+        cv2.waitKey(-1)
 
 
     def __enter__(self):
