@@ -25,12 +25,12 @@ Version: 0.0.0-alpha
 import cv2
 from os.path import basename
 
-class video(object):
-    def __init__(self, vid):
-        self.vid = vid
 
+class video(object):
+    def __init__(self, *args, **kwargs):
         self.nextFrameNo = None
         self.totalFrames = None
+        self.cap = None
 
         self.properties = {
             cv2.CAP_PROP_POS_MSEC : ('CV_CAP_PROP_POS_MSEC',
@@ -78,15 +78,26 @@ class video(object):
             cv2.CAP_PROP_BUFFERSIZE : ('CV_CAP_PROP_BUFFERSIZE',
                                        'Amount of frames stored in internal buffer memory (note: only supported by DC1394 v 2.x backend currently).')}
 
-        self.open()
+        N = len(args)
+        if N == 0:
+            pass
+        elif N == 1:
+            self.vid = args[0]
+            self.open(self.vid)
+        else:
+            raise ValueError('Invalid number of parameters for video constructor')
 
 
-    def open(self):
-        self.cap = cv2.VideoCapture(self.vid)
+    def open(self, video):
+        if self.cap is not None:
+            self.cap.close()
+        self.cap = cv2.VideoCapture(video)
 
         if self.cap.isOpened():
             self.totalFrames = self.cap.get(cv2.CAP_PROP_FRAME_COUNT)
             self.nextFrameNo = self.cap.get(cv2.CAP_PROP_POS_FRAMES)
+        else:
+            raise IOError('Could not open file "' + self.vid)
 
 
     def readFrame(self, decode=True):
@@ -126,8 +137,11 @@ class video(object):
 
 
     def isFrameAvailable(self):
-        return self.nextFrameNo <= self.totalFrames
+        return self.nextFrameNo < self.totalFrames
 
+
+    def getFrameRate(self):
+        return self.cap.get(cv2.CAP_PROP_FPS)
 
     def getMs(self):
         return self.cap.get(cv2.CAP_PROP_POS_MSEC)
