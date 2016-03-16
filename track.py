@@ -209,9 +209,9 @@ class trackedArea(object):
             self.templCnt = 0
             self.templStack = np.concatenate([self.templ[..., np.newaxis] for i in range(self.stackSize)], axis=3)
 
-        self.templCnt %= (self.stackSize - 1)
         self.templStack[:, :, :, self.templCnt] = self.templ
         self.templCnt += 1
+        self.templCnt %= self.stackSize  # If 30, reset to 0
 
     def getGrayStackAve(self):
         ave = self.getStackAve()
@@ -219,11 +219,14 @@ class trackedArea(object):
 
     def getStack(self):
         stack = np.concatenate([self.templStack[..., i] for i in range(self.stackSize)], axis=1)
-        return np.concatenate((self.getStackAve(), stack), axis=1)
+        return np.concatenate((stack, np.zeros_like(self.templ), self.getStackAve()), axis=1)
 
     def getStackAve(self):
-        self.templWeights = 0.5 * np.ones(self.stackSize)
-        self.templWeights[self.templCnt] = 1.0
+        self.templWeights = 0.25 * np.ones(self.stackSize)
+        lastTemplCnt = self.templCnt - 1
+        if self.templCnt == 0:
+            lastTemplCnt = self.stackSize - 1
+        self.templWeights[lastTemplCnt] = 1.0
         ave = np.average(self.templStack, axis=3, weights=self.templWeights).astype(np.uint8)
         return ave
 
@@ -282,6 +285,9 @@ class watch(object):
         self.plotLength = 600
         self.driftMax = 1
         self.distMax = 1
+
+        plt.ion()
+
 
 
 
@@ -489,11 +495,13 @@ class watch(object):
                 plt.title('Drift from starting position')
                 plt.ylabel('Drift (pixels)')
                 plt.tick_params(axis='x', labelbottom='off')
-                plt.ion()
+            else:
+                data[idx] = drift[i]
+                self.driftPlot[i].set_ydata(data)
+            finally:
                 plt.show()
-            data = self.driftPlot[i].get_ydata()
-            data[idx] = drift[i]
-            self.driftPlot[i].set_ydata(data)
+
+
         if drift.max() > self.driftMax:
             self.driftMax = drift.max()
         plt.ylim([0, self.driftMax])
@@ -521,11 +529,12 @@ class watch(object):
                 plt.title('Distance from main larva')
                 plt.xlabel('Frame')
                 plt.ylabel('Distance (pixels)')
-                plt.ion()
+            else:
+                data[idx] = dist[i]
+                self.distPlot[i].set_ydata(data)
+            finally:
                 plt.show()
-            data = self.distPlot[i].get_ydata()
-            data[idx] = dist[i]
-            self.distPlot[i].set_ydata(data)
+
         if dist.max() > self.distMax:
             self.distMax = dist.max()
         plt.ylim([0, self.distMax])
