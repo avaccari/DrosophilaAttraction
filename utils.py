@@ -36,10 +36,12 @@ class circBuffer(object):
         self.size = size
         self.frameNo = 0
         self.buffer = None
+        self.fullyInitialized = False
+        self.totalFrames = 0
 
     def addElement(self, frame):
         """
-        Adds the next element to the circular buffer.
+        Adds the next element to the circular buffer
 
         The fist call allocates the entire buffer based on the shape of `frame`
         and the `size` of the buffer, and fills it with replicas of the first
@@ -50,14 +52,24 @@ class circBuffer(object):
         else:
             self.buffer[..., self.frameNo] = frame
 
-        self.frameNo += 1
-        self.frameNo %= self.size
+        self.totalFrames += 1
+        self.frameNo = self.totalFrames % self.size
 
     def getBuffer(self):
         """
-        Returns the entire buffer as a large array stacked along an additional
+        Returns the entire buffer
+
+        The buffer is returned as a large array stacked along an additional
         dimension respect to the buffer elements.
 
         Global operations can be performed along `axis=-1`.
         """
         return self.buffer
+
+    def isFullyInitialized(self):
+        """
+        Return the initialization state of the buffer
+
+        If `True` all elements in the buffer have been updated at least once.
+        """
+        return self.totalFrames >= self.size
