@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Created on Thu Mar 31 11:15:13 2016
-Name:
-Purpose:
+Name:    backgroundSubtractor.py
+Purpose: Provides different background subtraction approaches
 Author:  Andrea Vaccari (av9g@virginia.edu)
 Version: 0.0.0-alpha
 
@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 from utils import circBuffer
 from scipy.stats import norm as spsNorm
+import matplotlib.pyplot as plt
 
 
 class plot(object):
@@ -57,56 +58,126 @@ class plot(object):
         cv2.waitKey(1)
 
 
+class createBackgroundSubtractorAVG(object):
+    def __init__(self, bufferSize=100, threshold=32, alpha=0.01):
+
+        self.alpha = alpha
+        self.bufferSize = bufferSize
+        self.threshold = threshold
+
+        self.fgbg = None
+
+        self.cnt = 0
+
+    def apply(self, frame, mask=False):
+        self.cnt += 1
+
+        if self.fgbg is None:
+            self.fgbg = frame.astype(np.float, copy=True)
+
+        bg = cv2.convertScaleAbs(self.fgbg)
+
+        fg = cv2.subtract(frame, bg)
+
+        _, fgmask = cv2.threshold(fg, self.threshold, 255, cv2.THRESH_BINARY)
+
+        self.fgbg = cv2.accumulateWeighted(frame, self.fgbg, self.alpha)
+
+        if mask is True:
+            return fgmask, fg
+
+        return fg
+
+    def isFullyInitialized(self):
+        return (self.cnt > self.bufferSize)
+
+
 class createBackgroundSubtractorRG(object):
     def __init__(self, bufferSize=100, threshold=2.5, display=False):
 
         self.threshold = threshold
         self.bufferSize = bufferSize
 
-        self.frameNo = 0
         self.buffer = circBuffer(bufferSize)
+
+        self.sizeBuffer = circBuffer(bufferSize)
 
         self.disp = None
         if display is True:
             self.disp = plot()
 
     def apply(self, frame, mask=False):
+        fgmask = np.zeros_like(frame, dtype=np.bool)
+        fgbg = np.zeros_like(frame, dtype=np.uint8)
+
+        # If first time, initialize image buffer
         if self.buffer.getBuffer() is None:
             self.buffer.addElement(frame)
-            mask = np.ones_like(frame, dtype=np.bool)
-            fgbg = frame
-            self.mean = frame
-            self.var = np.zeros_like(frame)
         else:
-            buff = self.buffer.getBuffer()
+            # If image buffer is initialized perform detection
+            if self.isImageBufferInitialized() is True:
+                # Get Buffer and calculate average
+                buff = self.buffer.getBuffer()
+                mean = buff.mean(axis=-1)
 
-            self.mean = np.mean(buff, axis=-1)
-            diff = frame - self.mean
-            self.var = np.var(buff, axis=-1)
-            norm = (diff * diff) / self.var
-            mask = norm > (self.threshold * self.threshold)
+                # Calculate difference
+                diff = frame - mean
 
-            fgbg = cv2.bitwise_and(frame, frame, mask=mask.astype(np.uint8))
+                # Evaluate outliers (foreground)
+                var = buff.var(axis=-1)
+                norm = (diff * diff) / var
+                fgmask = norm > (self.threshold * self.threshold)
+                fgSize = fgmask.sum()
 
-            # If the buffer is fully initialized, replace the foreground pixels
-            # with values drawn from the corresponding distribution. This will
-            # preserve the statistic in case the object in the foreground stops
-            if self.isFullyInitialized() is True:
-                fromStat = spsNorm.rvs(self.mean, np.sqrt(self.var), 1)
-                frame[mask] = fromStat[mask]
+                # If first detection, initialize FG size buffer
+                if self.sizeBuffer.getBuffer() is None:
+                    self.sizeBuffer.addElement(fgSize)
+                else:
+                    # If FG size buffer is initialized detect foreground
+                    if self.isFullyInitialized() is True:
+                        # Get FG size buffer and calculate average
+                        buff = self.sizeBuffer.getBuffer()
+                        sizeMean = buff.mean(axis=-1)
+
+                        # Calculate difference
+                        diff = fgSize - sizeMean
+
+                        # Evaluate if outlier (size)
+                        sizeVar = buff.var(axis=-1)
+                        norm = (diff * diff) / sizeVar
+
+                        # If size outlier, skip
+                        if norm > 4 * (self.threshold * self.threshold):
+                            if mask is True:
+                                return fgmask, fgbg
+
+                            return fgbg
+
+                        # Process FG
+                        fgbg = cv2.bitwise_and(frame, frame, mask=fgmask.astype(np.uint8))
+
+                        # Replace the FG pixels with values drawn from the
+                        # corresponding distribution. This will preserve
+                        # the statistic in case the object in the
+                        # foreground stops
+                        fromStat = spsNorm.rvs(mean, np.sqrt(var), 1)
+                        frame[fgmask] = fromStat[fgmask]
+
+                    self.sizeBuffer.addElement(fgSize)
 
             self.buffer.addElement(frame)
 
-        self.frameNo += 1
-
         if self.disp is not None:
-            self.disp.show(self.mean, self.var)
+            self.disp.show(mean, var)
 
         if mask is True:
-            return mask, fgbg
+            return fgmask, fgbg
 
         return fgbg
 
-    def isFullyInitialized(self):
+    def isImageBufferInitialized(self):
         return self.buffer.isFullyInitialized()
+
+    def isFullyInitialized(self):
+        return self.sizeBuffer.isFullyInitialized()
 
