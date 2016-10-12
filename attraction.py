@@ -93,7 +93,21 @@ class main(object):
         self.selectionType = None
 
 
+    def detectLarva(self, img):
+        # Detect edges in the foreground and display
+        larva = skif.canny(img, sigma=1.)
+        larva_norm = cv2.normalize(larva.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
 
+        # Find countours in edges
+        _, contours, hierarchy = cv2.findContours(larva_norm,
+                                                  cv2.RETR_TREE,
+                                                  cv2.CHAIN_APPROX_NONE)
+
+        # Might have to do some filtering here (area of larva ~ 30)
+                
+        return contours
+        
+        
     def processFrame(self):
         # Remove background (gets better with time)
         fg = self.fgbg.apply(self.sourceFrame, mask=False)
@@ -101,28 +115,26 @@ class main(object):
         # If background subtractor is initialized
         if self.fgbg.isFullyInitialized() is True:
             # Show detected foreground
-            self.showFrame('Foreground', fg)
+#            self.showFrame('Foreground', fg)
 
-            # Detect edges in the foreground and display
-            fg_edge = skif.canny(fg, sigma=1.)
-            fg_edge = cv2.normalize(fg_edge.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-            self.showFrame('Foreground edges', fg_edge)
+            # Detect larva in the foreground
+            contours = self.detectLarva(fg)            
 
-            # Create heatmap from edges
+            # Add detection to original image in green
+            self.processedFrame = cv2.cvtColor(self.sourceFrame, cv2.COLOR_GRAY2BGR)
+            cv2.drawContours(self.processedFrame, contours, 0, (0, 255, 0), 1)
+    
+            # Create heatmap from detection
             if self.heatMap is None:
                 self.heatMap = np.zeros_like(self.sourceFrame, dtype=np.float)
-            self.heatMap += fg_edge
+
+            larva = np.zeros_like(self.heatMap)
+            cv2.drawContours(larva, contours, 0, 1, cv2.FILLED)
+            self.heatMap += larva
             heat_norm = cv2.normalize(self.heatMap/self.heatMap.max(), None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8UC1)
             heat_color = cv2.applyColorMap(heat_norm, cv2.COLORMAP_HOT)
             self.showFrame('Heatmap', heat_color)
 
-            # Add edges to original image in green
-            orig_color = cv2.cvtColor(self.sourceFrame, cv2.COLOR_GRAY2BGR)
-            b = np.zeros_like(fg_edge)
-            g = fg_edge
-            r = b.copy()
-            edge_color = cv2.merge((b, g, r))
-            self.processedFrame = cv2.add(orig_color, edge_color)
         else:
             self.processedFrame = self.sourceFrame
 
