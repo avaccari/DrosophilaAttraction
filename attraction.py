@@ -52,6 +52,18 @@ class region(object):
     def setTarget(self, bbox):
         self.target = region(bbox)
 
+        
+class larva(object):
+    def __init__(self):
+        self.contour = None
+        self.center = None
+    
+    def updateContour(self, contour):
+        pass
+    
+    def getCenter(self):
+        pass
+        
 
 
 class main(object):
@@ -91,6 +103,8 @@ class main(object):
         self.selectionMask = None
         self.selectionMode = False
         self.selectionType = None
+        
+        self.larva = larva()  # What if more than one larva in more than one arena?
 
 
     def detectLarva(self, img):
@@ -104,8 +118,8 @@ class main(object):
                                                   cv2.CHAIN_APPROX_NONE)
 
         # Might have to do some filtering here (area of larva ~ 30)
-                
-        return contours
+        larva = contours
+        return larva
         
         
     def processFrame(self):
@@ -118,22 +132,23 @@ class main(object):
 #            self.showFrame('Foreground', fg)
 
             # Detect larva in the foreground
-            contours = self.detectLarva(fg)            
-
-            # Add detection to original image in green
-            self.processedFrame = cv2.cvtColor(self.sourceFrame, cv2.COLOR_GRAY2BGR)
-            cv2.drawContours(self.processedFrame, contours, 0, (0, 255, 0), 1)
-    
-            # Create heatmap from detection
+            larva = self.detectLarva(fg)   
+            print larva
+                
+            # Create heatmap and add to original image in HOT colormap
             if self.heatMap is None:
                 self.heatMap = np.zeros_like(self.sourceFrame, dtype=np.float)
 
-            larva = np.zeros_like(self.heatMap)
-            cv2.drawContours(larva, contours, 0, 1, cv2.FILLED)
-            self.heatMap += larva
+            temp = np.zeros_like(self.heatMap)
+            cv2.drawContours(temp, larva, 0, 1, cv2.FILLED)
+            self.heatMap += temp
             heat_norm = cv2.normalize(self.heatMap/self.heatMap.max(), None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8UC1)
             heat_color = cv2.applyColorMap(heat_norm, cv2.COLORMAP_HOT)
-            self.showFrame('Heatmap', heat_color)
+            self.processedFrame = cv2.cvtColor(self.sourceFrame, cv2.COLOR_GRAY2BGR)
+            cv2.add(self.processedFrame, heat_color, self.processedFrame, mask=heat_norm)
+            
+            # Add larva contour to original image in green
+            cv2.drawContours(self.processedFrame, larva, 0, (0, 255, 0), 1)
 
         else:
             self.processedFrame = self.sourceFrame
@@ -145,36 +160,7 @@ class main(object):
 
 
 
-        # Trace and heatmap
-        if self.fgbg.isFullyInitialized() is True:
-            if self.heatMap is None:
-                self.heatMap = np.zeros_like(self.sourceFrame, dtype=np.float)
-            self.heatMap += opened
-            normalized = 255 * (self.heatMap / self.heatMap.max())
-            _, mask = cv2.threshold(normalized.astype(np.uint8), 0, 255, cv2.THRESH_BINARY)
-#            mask_inv = cv2.bitwise_not(mask)
-#
-#            source = cv2.bitwise_and(self.sourceFrame, self.sourceFrame, mask=mask_inv)
-            src_alpha = cv2.cvtColor(self.sourceFrame, cv2.COLOR_GRAY2BGRA)
-
-            colored = cv2.applyColorMap(normalized.astype(np.uint8),
-                                        cv2.COLORMAP_HOT)
-            colored = cv2.bitwise_and(colored, colored, mask=mask)
-            b, g, r = cv2.split(colored)
-            col_alpha = cv2.merge((b, g, r, normalized.astype(np.uint8)))
-
-            self.processedFrame = cv2.add(src_alpha, col_alpha)
-            self.lastProcFrame = self.processedFrame.copy()
-
-            # Detect and draw contours
-            source = opened.copy()
-            im2, contours, hierarchy = cv2.findContours(source,
-                                                        cv2.RETR_TREE,
-                                                        cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(self.processedFrame, contours, -1, (0, 255, 0), 1)
-        else:
-            self.processedFrame = self.sourceFrame.copy()
-
+      
 
     def showFrame(self, window, frame):
         if frame is not None:
