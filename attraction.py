@@ -43,10 +43,11 @@ from userInt import userInt
 
 class region(object):
     def __init__(self, bbox):
-        self.bbox = bbox
-        self.center = np.asarray(bbox[0])
-        self.size = np.asarray(bbox[1])
+        # The 2 factor is due to the reduction in size before processing
+        self.center = np.asarray(bbox[0]) / 2
+        self.size = np.asarray(bbox[1]) / 2
         self.angle = np.asarray(bbox[2])
+        self.bbox = (self.center, self.size, self.angle)
         self.target = None
 
     def setTarget(self, bbox):
@@ -55,16 +56,18 @@ class region(object):
         
 class larva(object):
     def __init__(self):
-        self.contour = None
+        self.contour = []
         self.center = None
     
     def updateContour(self, contour):
-        pass
-    
-    def getCenter(self):
-        pass
+        self.contour = [contour]
+        if self.contour:
+            self.center = contour.squeeze().mean(axis=0)
         
-
+    def clearContour(self):
+        self.contour = []
+        self.center = None
+    
 
 class main(object):
     def __init__(self, fil):
@@ -113,14 +116,38 @@ class main(object):
         larva_norm = cv2.normalize(larva.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
 
         # Find countours in edges
-        _, contours, hierarchy = cv2.findContours(larva_norm,
+        _, contours, _ = cv2.findContours(larva_norm,
                                                   cv2.RETR_TREE,
                                                   cv2.CHAIN_APPROX_NONE)
 
         # Might have to do some filtering here (area of larva ~ 30)
-        larva = contours
-        return larva
+        self.larva.clearContour()
+        if contours:
+            self.larva.updateContour(contours[0])
+            
+            
+    def preprocessFrame(self):
+        # Pyramid down
+        frame = cv2.pyrDown(self.sourceFrame, borderType=cv2.BORDER_REPLICATE)
         
+        # Create mask first time around (hugly but necessary because of pyrDown)
+        if self.selectionMask is None:
+            self.selectionMask = np.ones_like(frame)
+            if self.arenasNo != 0:
+                self.selectionMask = np.zeros_like(frame)
+                for a in self.arenas:
+                    cv2.ellipse(self.selectionMask, a.bbox, [255, 255, 255], -1)
+            self.selectionMask = cv2.cvtColor(self.selectionMask, cv2.COLOR_BGR2GRAY)
+            
+        # Mask frame
+        frame = cv2.bitwise_and(frame,
+                                frame,
+                                mask=self.selectionMask)
+
+        # Convert to gray
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        self.sourceFrame = frame.copy()
         
     def processFrame(self):
         # Remove background (gets better with time)
@@ -128,39 +155,42 @@ class main(object):
 
         # If background subtractor is initialized
         if self.fgbg.isFullyInitialized() is True:
-            # Show detected foreground
-#            self.showFrame('Foreground', fg)
 
             # Detect larva in the foreground
-            larva = self.detectLarva(fg)   
-            print larva
+            self.detectLarva(fg)
                 
             # Create heatmap and add to original image in HOT colormap
             if self.heatMap is None:
                 self.heatMap = np.zeros_like(self.sourceFrame, dtype=np.float)
 
             temp = np.zeros_like(self.heatMap)
-            cv2.drawContours(temp, larva, 0, 1, cv2.FILLED)
+            cv2.drawContours(temp, self.larva.contour, 0, 1, cv2.FILLED)
             self.heatMap += temp
             heat_norm = cv2.normalize(self.heatMap/self.heatMap.max(), None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8UC1)
             heat_color = cv2.applyColorMap(heat_norm, cv2.COLORMAP_HOT)
             self.processedFrame = cv2.cvtColor(self.sourceFrame, cv2.COLOR_GRAY2BGR)
             cv2.add(self.processedFrame, heat_color, self.processedFrame, mask=heat_norm)
             
+            # Add center of selected arenas and their targets
+            for arena in self.arenas:
+                cv2.ellipse(self.processedFrame, arena.bbox, [255, 0, 0], 2)
+                self.drawCross(self.processedFrame, arena.center.astype(np.uint16),
+                               color=[255, 0, 0])
+                if arena.target is not None:
+                    cv2.ellipse(self.processedFrame, arena.target.bbox, [0, 0, 255], 2)
+                    self.drawCross(self.processedFrame, arena.target.center.astype(np.uint16))
+            
             # Add larva contour to original image in green
-            cv2.drawContours(self.processedFrame, larva, 0, (0, 255, 0), 1)
-
+            cv2.drawContours(self.processedFrame, self.larva.contour, 0, (0, 255, 0), 1)
+            if self.larva.center is not None:
+                self.drawCross(self.processedFrame, self.larva.center.astype(np.uint16),
+                               color=[0, 255, 0])
+                    
         else:
             self.processedFrame = self.sourceFrame
 
         return
 
-
-
-
-
-
-      
 
     def showFrame(self, window, frame):
         if frame is not None:
@@ -174,28 +204,16 @@ class main(object):
         if frame is None:
             return
 
-        # Initialize frames for which we need to know the source size
-        if self.sourceFrame is None:
-            self.selectionMask = np.ones(frame.shape[:2], dtype=np.uint8)
-
         self.sourceFrame = frame.copy()
 
 
-    def preprocessFrame(self):
-        # Mask frame
-        frame = cv2.bitwise_and(self.sourceFrame,
-                                self.sourceFrame,
-                                mask=self.selectionMask)
+    def drawCross(self, window, center, color=[0, 0, 255], size=6):
+        (x, y) = center
+        sz = int(round(size / 2))
+        cv2.line(window, (x - sz, y), (x + sz, y), color)
+        cv2.line(window, (x, y - sz), (x, y + sz), color)
 
-        # Pyramid down
-        frame = cv2.pyrDown(frame, borderType=cv2.BORDER_REPLICATE)
-
-        # Convert to gray
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        self.sourceFrame = frame.copy()
-
-
+        
     def selectRegions(self):
         # Pop-up a new window to select regions of interest
         cv2.namedWindow(self.selectionWindow)
@@ -223,23 +241,7 @@ class main(object):
                 self.regions = []
                 self.selectionMode = False
 
-        # Create mask based on selections
-        if self.arenasNo == 0:
-            self.selectionMask = np.ones_like(self.workingFrame)
-        else:
-            self.selectionMask = np.zeros_like(self.workingFrame)
-            for a in self.arenas:
-                cv2.ellipse(self.selectionMask, a.bbox, [255, 255, 255], -1)
-        self.selectionMask = cv2.cvtColor(self.selectionMask, cv2.COLOR_BGR2GRAY)
-
         cv2.destroyWindow(self.selectionWindow)
-
-
-    def drawCross(self, window, center, color=[0, 0, 255], size=6):
-        (x, y) = center
-        sz = int(round(size / 2))
-        cv2.line(window, (x - sz, y), (x + sz, y), color)
-        cv2.line(window, (x, y - sz), (x, y + sz), color)
 
 
     def mouseInteraction(self, event, x, y, flags, params):
@@ -254,7 +256,7 @@ class main(object):
             if self.selPtsNo > 4:
                 ellipse = cv2.fitEllipse(np.asarray(self.selPts))
                 cv2.ellipse(self.workingFrame, ellipse, [0, 255, 0], 2)
-                center = np.asarray(ellipse[0]).astype(np.int)
+                center = np.asarray(ellipse[0]).astype(np.uint16)
                 self.drawCross(self.workingFrame, center, [0, 255, 0], 10)
                 self.showFrame(self.selectionWindow, self.workingFrame)
 
@@ -293,12 +295,28 @@ class main(object):
 
 
     def annotateFrame(self):
+        time = self.vid.getMs()/1000.0
+        d_ctr = np.inf
+        d_trg = np.inf
+        if self.larva.center is not None:
+            larva_c = self.larva.center
+            for arena in self.arenas:
+                d_ctr = arena.center - larva_c
+                d_ctr = np.sqrt(np.inner(d_ctr, d_ctr))
+                if arena.target is not None:
+                    d_trg = arena.target.center - larva_c
+                    d_trg = np.sqrt(np.inner(d_trg, d_trg))
+        
+        txt = '{0:3.2f}s: d_ctr: {1:3.2f}, d_trg: {2:3.2f}'.format(time, d_ctr, d_trg)
+        
         cv2.putText(self.processedFrame,
-                    str(int(self.vid.getMs()/1000)) + 's',
+                    txt,
                     (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
-                    255)
+                    (255, 255, 255))
+        
+
 
 
     def watch(self, scaleFps):
