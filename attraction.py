@@ -22,31 +22,30 @@ Version: 0.0.0-alpha
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-# Add exclusion regions that shoud work as detection region as well
-# User could select a spot and we create 1/10x1/10 of the +-1 range box around
-# - Average distance
-# - Histogram
+# TODO:
+# - Make sure the detection IS a larva
+# - Handle the larva-target interaction
 # - Metadata about regions
 # - Store heatmap
-
-# TODO:
 # - If the larva is not detected, decide what to do with the various metrics
 #   inf? NAN? 0? don't store it?
-# - Handle the larva-target interaction
+
 
 import argparse
 import cv2
-from os.path import basename
+from os.path import basename, splitext
 import numpy as np
 import pandas as pd
-from cvVideo import video
 #from backgroundSubtractor import createBackgroundSubtractorRG
 from backgroundSubtractor import createBackgroundSubtractorAVG
 from skimage import feature as skif
 import sys
 import matplotlib.pyplot as plt
 import matplotlib.path as mplpath
+from statsmodels.nonparametric.kde import KDEUnivariate
+
 from userInt import userInt
+from cvVideo import video
 
 
 class larva(object):
@@ -89,7 +88,7 @@ class region(object):
             if self.target is not None:
                 d_trg = self.target.center - larva_c
                 d_trg = np.sqrt(np.inner(d_trg, d_trg))
-                return d_ctr, d_trg
+        return d_ctr, d_trg
 
     def setTarget(self, bbox, name=None):
         self.target = region(bbox, name)
@@ -97,6 +96,8 @@ class region(object):
 
 class main(object):
     def __init__(self, fil):
+        plt.ion()
+
         # Instantiate user interface
         ui = userInt()
 
@@ -157,7 +158,7 @@ class main(object):
 
         # If we found no contous, bail
         if not contours:
-            return
+            return False
 
         # If we found at least one associate it to a larva and the correct arena
         # Might have to do some filtering here (area of larva ~ 30)
@@ -172,6 +173,8 @@ class main(object):
 
                 # Decide how to handle the target because we only have the
                 # bounding rectangle instead of the ellipse
+        
+        return True
 
     def preprocessFrame(self):
         # Pyramid down
@@ -208,7 +211,9 @@ class main(object):
         if self.fgbg.isFullyInitialized() is True:
 
             # Detect larva in the foreground
-            self.detectLarva(fg)
+            if self.detectLarva(fg) is False:
+                self.processedFrame = self.sourceFrame
+                return
 
             # Create heatmap and add to original image in HOT colormap
             if self.heatMap is None:
@@ -281,11 +286,10 @@ class main(object):
 
 
     def annotateFrame(self):
-        time = self.vid.getMs()/1000.0
-
-        d_ctr, d_trg = self.arenas[-1].getDistances()
-
-        txt = '{0:3.2f}s: d_ctr: {1:3.2f}, d_trg: {2:3.2f}'.format(time, d_ctr, d_trg)
+        last = self.data.iloc[-1]
+        txt = '{0:3.2f}s: d_ctr: {1:3.2f}, d_trg: {2:3.2f}'.format(last['FrameTimeMs'],
+                                                                   last['DistArenaCntrNorm'],
+                                                                   last['DistTrgtCntrNorm'])
 
         cv2.putText(self.processedFrame,
                     txt,
@@ -393,6 +397,79 @@ class main(object):
                 if ok is False:
                     self.selectionMode = False
 
+    def processData(self):
+        dst_arena = self.data['DistArenaCntrNorm'].values
+        dst_trgt = self.data['DistTrgtCntrNorm'].values
+        
+        # Calculate statistics of distances
+        dst_arena_avg = np.mean(dst_arena)
+        dst_arena_med = np.median(dst_arena)
+        dst_arena_stdev = np.std(dst_arena)
+        dst_trgt_avg = np.mean(dst_trgt)
+        dst_trgt_med = np.median(dst_trgt)
+        dst_trgt_stdev = np.std(dst_trgt)
+        
+        # Create a statistics dataframe
+        statData = pd.DataFrame({'DistArenaCntrAvg': dst_arena_avg,
+                                 'DistArenaCntrMed': dst_arena_med,
+                                 'DistArenaCntrStdev': dst_arena_stdev,
+                                 'DistTrgtCntrAvg': dst_trgt_avg,
+                                 'DistTrgtCntrMed': dst_trgt_med,
+                                 'DistTrgtCntrStdev': dst_trgt_stdev},
+                                 index=[0])
+
+        # Evaluate KDE of normalized distance from center of arena
+        d_arena_kde = KDEUnivariate(dst_arena)
+        d_arena_kde.fit()
+        
+        # Evaluate KDE of normalized distance from center of target
+        d_trgt_kde = KDEUnivariate(dst_trgt)
+        d_trgt_kde.fit()
+
+        # Plot KDEs
+        plt.figure()
+        plt.plot(d_arena_kde.support, d_arena_kde.density, color='blue')
+        plt.plot(d_trgt_kde.support, d_trgt_kde.density, color='red')
+        plt.xlabel('Normalized distance')
+        plt.ylabel('Probability')
+        plt.title("KDE of distance from arena's (blue) and target's (red) centers")
+        plt.show()
+
+        # Create KDE dataframe
+        kdeData = pd.DataFrame({'DistArenaCntrNorm': d_arena_kde.support,
+                                'DistArenaCntrProb': d_arena_kde.density,
+                                'DistTrgtCntrNorm': d_trgt_kde.support,
+                                'DistTrgtCntrProb': d_trgt_kde.density})
+
+        # Create and save Excel workbook
+        writer = pd.ExcelWriter(splitext(self.fil)[0] + '.xlsx')
+        self.data.to_excel(writer,
+                           'Raw data',
+                           columns=['FrameNo',
+                                    'FrameTimeMs',
+                                    'DistArenaCntrPxl',
+                                    'DistTrgtCntrPxl',
+                                    'DistArenaCntrNorm',
+                                    'DistTrgtCntrNorm'])
+        kdeData.to_excel(writer,
+                         'KDE data',
+                         columns=['DistArenaCntrNorm',
+                                  'DistArenaCntrProb',
+                                  'DistTrgtCntrNorm',
+                                  'DistTrgtCntrProb'])
+        
+        statData.to_excel(writer,
+                          'Statistics',
+                          columns=['DistArenaCntrAvg',
+                                   'DistArenaCntrMed',
+                                   'DistArenaCntrStdev',
+                                   'DistTrgtCntrAvg',
+                                   'DistTrgtCntrMed',
+                                   'DistTrgtCntrStdev'])
+        
+        writer.save()
+
+
     def watch(self, scaleFps):
         with video(self.fil) as self.vid:
 
@@ -430,7 +507,7 @@ class main(object):
 
                 self.frameNo += 1
 
-            print self.data
+            self.processData()
 
     def __enter__(self):
         return self
