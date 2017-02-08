@@ -40,6 +40,9 @@ import pandas as pd
 from backgroundSubtractor import createBackgroundSubtractorAVG
 from skimage import feature as skif
 import sys
+import time
+import matplotlib
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import matplotlib.path as mplpath
 from statsmodels.nonparametric.kde import KDEUnivariate
@@ -267,7 +270,6 @@ class main(object):
             # Annotate the frame
             self.annotateFrame()
 
-
         else:
             self.processedFrame = self.sourceFrame
 
@@ -433,6 +435,7 @@ class main(object):
         plt.xlabel('Normalized distance')
         plt.ylabel('Probability')
         plt.title("KDE of distance from arena's (blue) and target's (red) centers")
+        plt.draw()
         plt.show()
 
         # Create KDE dataframe
@@ -440,9 +443,24 @@ class main(object):
                                 'DistArenaCntrProb': d_arena_kde.density,
                                 'DistTrgtCntrNorm': d_trgt_kde.support,
                                 'DistTrgtCntrProb': d_trgt_kde.density})
+        
+        # Create assay metadata dataframe
+        arena_size = self.arenas[-1].size * 2;
+        arena_cntr = self.arenas[-1].center * 2;                        
+        target_size = self.arenas[-1].target.size * 2;
+        target_cntr = self.arenas[-1].target.center * 2;                        
+        assyMetadata = pd.DataFrame({'ArenaWidth': arena_size[0],
+                                     'ArenaHeight': arena_size[1],
+                                     'ArenaCntrX': arena_cntr[0],
+                                     'ArenaCntrY': arena_cntr[1],
+                                     'TargerWidth': target_size[0],
+                                     'TargetHeight': target_size[1],
+                                     'TargetCntrX': target_cntr[0],
+                                     'TargetCntrY': target_cntr[1]},
+                                     index=[0])
 
         # Create and save Excel workbook
-        writer = pd.ExcelWriter(splitext(self.fil)[0] + '.xlsx')
+        writer = pd.ExcelWriter(splitext(self.fil)[0] + time.strftime('_%Y%m%d%H%M%S') + '.xlsx')
         self.data.to_excel(writer,
                            'Raw data',
                            columns=['FrameNo',
@@ -466,6 +484,17 @@ class main(object):
                                    'DistTrgtCntrAvg',
                                    'DistTrgtCntrMed',
                                    'DistTrgtCntrStdev'])
+    
+        assyMetadata.to_excel(writer,
+                              'Metadata',
+                              columns=['ArenaWidth',
+                                       'ArenaHeight',
+                                       'ArenaCntrX',
+                                       'ArenaCntrY',
+                                       'TargerWidth',
+                                       'TargetHeight',
+                                       'TargetCntrX',
+                                       'TargetCntrY'])
         
         writer.save()
 

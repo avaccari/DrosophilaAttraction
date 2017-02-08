@@ -26,7 +26,6 @@ import cv2
 import numpy as np
 from utils import circBuffer
 from scipy.stats import norm as spsNorm
-import matplotlib.pyplot as plt
 
 
 class plot(object):
