@@ -43,7 +43,7 @@ import sys
 import time
 import matplotlib
 matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import matplotlib.path as mplpath
 from statsmodels.nonparametric.kde import KDEUnivariate
 
@@ -55,15 +55,23 @@ class larva(object):
     def __init__(self):
         self.contour = []
         self.center = None
+        self.totalDist = 0
+        self.lastDist = 0
 
     def updateContour(self, contour):
         self.contour = [contour]
         if self.contour:
-            self.center = contour.squeeze().mean(axis=0)
+            if self.center is None:
+                self.center = contour.squeeze().mean(axis=0)
+            center = contour.squeeze().mean(axis=0)
+            trvld = self.center - center
+            self.lastDist = np.sqrt(np.inner(trvld, trvld))
+            self.totalDist += self.lastDist
+            self.center = center
 
     def clearContour(self):
         self.contour = []
-        self.center = None
+
 
 
 class region(object):
@@ -99,7 +107,7 @@ class region(object):
 
 class main(object):
     def __init__(self, fil):
-        plt.ion()
+#        plt.ion()
 
         # Instantiate user interface
         ui = userInt()
@@ -141,6 +149,16 @@ class main(object):
         # Create an empty pandas dataframe to store the data
         self.data = pd.DataFrame({'FrameNo': [],
                                   'FrameTimeMs': [],
+                                  'LarvaPosX': [],
+                                  'LarvaPosY': [],
+                                  'LarvaLastDist': [],
+                                  'LarvaLastVel': [],
+                                  'LarvaTotalDist': [],
+                                  'LarvaPosXNorm': [],
+                                  'LarvaPosYNorm': [],
+                                  'LarvaLastDistNorm': [],
+                                  'LarvaLastVelNorm': [],
+                                  'LarvaTotalDistNorm': [],
                                   'DistArenaCntrPxl': [],
                                   'DistTrgtCntrPxl': [],
                                   'DistArenaCntrNorm': [],
@@ -176,7 +194,7 @@ class main(object):
 
                 # Decide how to handle the target because we only have the
                 # bounding rectangle instead of the ellipse
-        
+
         return True
 
     def preprocessFrame(self):
@@ -274,12 +292,39 @@ class main(object):
             self.processedFrame = self.sourceFrame
 
     def storeData(self):
+        arena = self.arenas[-1]
+        larva = arena.larva
+        norm = 1.0 / arena.norm
         time = self.vid.getMs() / 1000.0
-        d_ctr, d_trg = self.arenas[-1].getDistances()
-        (d_ctr_n, d_trg_n) = (d_ctr, d_trg) / self.arenas[-1].norm
+        d_ctr, d_trg = arena.getDistances()
+        l_pos = larva.center
+        l_ldist = larva.lastDist
+        try:
+            lastDeltaFrame = self.frameNo - self.data.iloc[-1]['FrameNo']
+        except IndexError:
+            l_lvel = 0
+        else:
+            l_lvel = l_ldist / lastDeltaFrame
+        l_tdist = larva.totalDist
+        d_ctr_n = d_ctr * norm
+        d_trg_n = d_trg * norm
+        l_pos_n = l_pos * norm
+        l_ldist_n = l_ldist * norm
+        l_lvel_n = l_lvel * norm
+        l_tdist_n = l_tdist * norm
 
         self.data = self.data.append({'FrameNo': self.frameNo,
                                       'FrameTimeMs': time,
+                                      'LarvaPosX': l_pos[0],
+                                      'LarvaPosY': l_pos[1],
+                                      'LarvaLastDist': l_ldist,
+                                      'LarvaLastVel': l_lvel,
+                                      'LarvaTotalDist': l_tdist,
+                                      'LarvaPosXNorm': l_pos_n[0],
+                                      'LarvaPosYNorm': l_pos_n[1],
+                                      'LarvaLastDistNorm': l_ldist_n,
+                                      'LarvaLastVelNorm': l_lvel_n,
+                                      'LarvaTotalDistNorm': l_tdist_n,
                                       'DistArenaCntrPxl': d_ctr,
                                       'DistTrgtCntrPxl': d_trg,
                                       'DistArenaCntrNorm': d_ctr_n,
@@ -288,10 +333,7 @@ class main(object):
 
 
     def annotateFrame(self):
-        last = self.data.iloc[-1]
-        txt = '{0:3.2f}s: d_ctr: {1:3.2f}, d_trg: {2:3.2f}'.format(last['FrameTimeMs'],
-                                                                   last['DistArenaCntrNorm'],
-                                                                   last['DistTrgtCntrNorm'])
+        txt = 'frame no: {0:5n}'.format(self.frameNo)
 
         cv2.putText(self.processedFrame,
                     txt,
@@ -402,7 +444,7 @@ class main(object):
     def processData(self):
         dst_arena = self.data['DistArenaCntrNorm'].values
         dst_trgt = self.data['DistTrgtCntrNorm'].values
-        
+
         # Calculate statistics of distances
         dst_arena_avg = np.mean(dst_arena)
         dst_arena_med = np.median(dst_arena)
@@ -410,7 +452,7 @@ class main(object):
         dst_trgt_avg = np.mean(dst_trgt)
         dst_trgt_med = np.median(dst_trgt)
         dst_trgt_stdev = np.std(dst_trgt)
-        
+
         # Create a statistics dataframe
         statData = pd.DataFrame({'DistArenaCntrAvg': dst_arena_avg,
                                  'DistArenaCntrMed': dst_arena_med,
@@ -423,32 +465,32 @@ class main(object):
         # Evaluate KDE of normalized distance from center of arena
         d_arena_kde = KDEUnivariate(dst_arena)
         d_arena_kde.fit()
-        
+
         # Evaluate KDE of normalized distance from center of target
         d_trgt_kde = KDEUnivariate(dst_trgt)
         d_trgt_kde.fit()
 
-        # Plot KDEs
-        plt.figure()
-        plt.plot(d_arena_kde.support, d_arena_kde.density, color='blue')
-        plt.plot(d_trgt_kde.support, d_trgt_kde.density, color='red')
-        plt.xlabel('Normalized distance')
-        plt.ylabel('Probability')
-        plt.title("KDE of distance from arena's (blue) and target's (red) centers")
-        plt.draw()
-        plt.show()
+#        # Plot KDEs
+#        plt.figure()
+#        plt.plot(d_arena_kde.support, d_arena_kde.density, color='blue')
+#        plt.plot(d_trgt_kde.support, d_trgt_kde.density, color='red')
+#        plt.xlabel('Normalized distance')
+#        plt.ylabel('Probability')
+#        plt.title("KDE of distance from arena's (blue) and target's (red) centers")
+#        plt.draw()
+#        plt.show()
 
         # Create KDE dataframe
         kdeData = pd.DataFrame({'DistArenaCntrNorm': d_arena_kde.support,
                                 'DistArenaCntrProb': d_arena_kde.density,
                                 'DistTrgtCntrNorm': d_trgt_kde.support,
                                 'DistTrgtCntrProb': d_trgt_kde.density})
-        
+
         # Create assay metadata dataframe
         arena_size = self.arenas[-1].size * 2;
-        arena_cntr = self.arenas[-1].center * 2;                        
+        arena_cntr = self.arenas[-1].center * 2;
         target_size = self.arenas[-1].target.size * 2;
-        target_cntr = self.arenas[-1].target.center * 2;                        
+        target_cntr = self.arenas[-1].target.center * 2;
         assyMetadata = pd.DataFrame({'ArenaWidth': arena_size[0],
                                      'ArenaHeight': arena_size[1],
                                      'ArenaCntrX': arena_cntr[0],
@@ -465,6 +507,16 @@ class main(object):
                            'Raw data',
                            columns=['FrameNo',
                                     'FrameTimeMs',
+                                    'LarvaPosX',
+                                    'LarvaPosY',
+                                    'LarvaLastDist',
+                                    'LarvaLastVel',
+                                    'LarvaTotalDist',
+                                    'LarvaPosXNorm',
+                                    'LarvaPosYNorm',
+                                    'LarvaLastDistNorm',
+                                    'LarvaLastVelNorm',
+                                    'LarvaTotalDistNorm',
                                     'DistArenaCntrPxl',
                                     'DistTrgtCntrPxl',
                                     'DistArenaCntrNorm',
@@ -475,7 +527,7 @@ class main(object):
                                   'DistArenaCntrProb',
                                   'DistTrgtCntrNorm',
                                   'DistTrgtCntrProb'])
-        
+
         statData.to_excel(writer,
                           'Statistics',
                           columns=['DistArenaCntrAvg',
@@ -484,7 +536,7 @@ class main(object):
                                    'DistTrgtCntrAvg',
                                    'DistTrgtCntrMed',
                                    'DistTrgtCntrStdev'])
-    
+
         assyMetadata.to_excel(writer,
                               'Metadata',
                               columns=['ArenaWidth',
@@ -495,7 +547,7 @@ class main(object):
                                        'TargetHeight',
                                        'TargetCntrX',
                                        'TargetCntrY'])
-        
+
         writer.save()
 
 
