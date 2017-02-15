@@ -43,7 +43,7 @@ import sys
 import time
 import matplotlib
 matplotlib.use('TkAgg')
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import matplotlib.path as mplpath
 from statsmodels.nonparametric.kde import KDEUnivariate
 
@@ -89,6 +89,9 @@ class region(object):
         # Larvae are in regions
         self.larva = larva()  # What if more than one larva in more than one arena?
 
+    def getScaledBBox(self, ratio=1.0):
+        return (self.center, self.size * ratio, self.angle)
+
     def getDistances(self):
         d_ctr = np.inf
         d_trg = np.inf
@@ -107,9 +110,9 @@ class region(object):
 
 class main(object):
     def __init__(self, fil):
-#        plt.ion()
+        plt.ion()
 
-        # Instantiate user interface
+       # Instantiate user interface
         ui = userInt()
 
         if fil is None:
@@ -145,6 +148,8 @@ class main(object):
         self.selectionMask = None
         self.selectionMode = False
         self.selectionType = None
+
+        self.thresholdRadius = 0.0
 
         # Create an empty pandas dataframe to store the data
         self.data = pd.DataFrame({'FrameNo': [],
@@ -258,7 +263,10 @@ class main(object):
 
             # Add center of selected arenas and their targets
             for arena in self.arenas:
-                cv2.ellipse(self.processedFrame, arena.bbox, [255, 0, 0], 2)
+                cv2.ellipse(self.processedFrame,
+                            arena.bbox,
+                            [255, 0, 0],
+                            2)
                 self.drawCross(self.processedFrame,
                                arena.center.astype(np.uint16),
                                color=[255, 0, 0])
@@ -281,6 +289,13 @@ class main(object):
                     self.drawCross(self.processedFrame,
                                    arena.larva.center.astype(np.uint16),
                                    color=[0, 255, 0])
+
+                # Add special ranges in dark green
+                cv2.ellipse(self.processedFrame,
+                            arena.getScaledBBox(self.thresholdRadius),
+                            [0, 127, 0],
+                            2)
+
 
             # Store data
             self.storeData()
@@ -453,13 +468,17 @@ class main(object):
         dst_trgt_med = np.median(dst_trgt)
         dst_trgt_stdev = np.std(dst_trgt)
 
+        # Calculate time/frame statistics
+        frm_insd_rad = 1.0 * np.sum(dst_arena < self.thresholdRadius) / dst_arena.size
+
         # Create a statistics dataframe
         statData = pd.DataFrame({'DistArenaCntrAvg': dst_arena_avg,
                                  'DistArenaCntrMed': dst_arena_med,
                                  'DistArenaCntrStdev': dst_arena_stdev,
                                  'DistTrgtCntrAvg': dst_trgt_avg,
                                  'DistTrgtCntrMed': dst_trgt_med,
-                                 'DistTrgtCntrStdev': dst_trgt_stdev},
+                                 'DistTrgtCntrStdev': dst_trgt_stdev,
+                                 'FracInsdRad': frm_insd_rad},
                                  index=[0])
 
         # Evaluate KDE of normalized distance from center of arena
@@ -470,15 +489,31 @@ class main(object):
         d_trgt_kde = KDEUnivariate(dst_trgt)
         d_trgt_kde.fit()
 
-#        # Plot KDEs
-#        plt.figure()
-#        plt.plot(d_arena_kde.support, d_arena_kde.density, color='blue')
-#        plt.plot(d_trgt_kde.support, d_trgt_kde.density, color='red')
-#        plt.xlabel('Normalized distance')
-#        plt.ylabel('Probability')
-#        plt.title("KDE of distance from arena's (blue) and target's (red) centers")
-#        plt.draw()
-#        plt.show()
+        # Plot KDEs
+        plt.figure()
+        plt.plot(d_arena_kde.support, d_arena_kde.density, color='blue')
+        plt.plot(d_trgt_kde.support, d_trgt_kde.density, color='red')
+        plt.plot((self.thresholdRadius, self.thresholdRadius),
+                 (0, plt.ylim()[1]),
+                 color = 'green')
+        plt.xlabel('Normalized distance')
+        plt.ylabel('Probability')
+        plt.title("KDE of distance from arena's (blue) and target's (red) centers")
+        plt.show()
+
+        # Plot distance vs time and limits
+        frames = self.data['FrameNo'].values
+        plt.figure()
+        plt.scatter(frames, dst_arena, color='blue')
+        plt.scatter(frames, dst_trgt, color='red')
+        plt.plot((0, frames.max()),
+                 (self.thresholdRadius, self.thresholdRadius),
+                 color='green')
+        plt.ylim((0, 1))
+        plt.xlabel('Frame number')
+        plt.ylabel('Normalized distance')
+        plt.title("Normalized distance from arena's (blue) and target's (red) centers")
+        plt.show()
 
         # Create KDE dataframe
         kdeData = pd.DataFrame({'DistArenaCntrNorm': d_arena_kde.support,
@@ -535,7 +570,8 @@ class main(object):
                                    'DistArenaCntrStdev',
                                    'DistTrgtCntrAvg',
                                    'DistTrgtCntrMed',
-                                   'DistTrgtCntrStdev'])
+                                   'DistTrgtCntrStdev',
+                                   'FracInsdRad'])
 
         assyMetadata.to_excel(writer,
                               'Metadata',
@@ -551,11 +587,15 @@ class main(object):
         writer.save()
 
 
+    def userParameters(self):
+        # Should be changed to allow for user input or various parameters
+        self.thresholdRadius = 0.15
+
+
     def watch(self, scaleFps):
         with video(self.fil) as self.vid:
 
             frameRate = 1
-
             if scaleFps is True:
                 frameRate = int(self.vid.getFrameRate())
 
@@ -582,6 +622,7 @@ class main(object):
                 if process is True:
                     if self.frameNo == 0:
                         self.selectRegions()
+                        self.userParameters()
                     self.preprocessFrame()
                     self.processFrame()
                     self.showFrame(self.mainWindow, self.processedFrame)
