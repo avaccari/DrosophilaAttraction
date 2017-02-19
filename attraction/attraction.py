@@ -25,10 +25,16 @@ Version: 0.0.0-alpha
 # TODO:
 # - Make sure the detection IS a larva
 # - Handle the larva-target interaction
-# - Metadata about regions
 # - Store heatmap
 # - If the larva is not detected, decide what to do with the various metrics
 #   inf? NAN? 0? don't store it?
+# - squares 1cm^2 count frames when it is inside
+# - center of arena is the center of a square and the center of the target is
+#   the center of another square
+# - random location with about the same distance from the center and calculate
+#   how much time is spend in something the same size
+# - might consider rewinding after initializing the background
+# - save as 10x10 excel with number of frames per cell
 
 
 import argparse
@@ -215,6 +221,10 @@ class main(object):
                     cv2.ellipse(self.selectionMask,
                                 a.bbox,
                                 [255, 255, 255],
+                                -1)
+                    cv2.ellipse(self.selectionMask,
+                                a.target.bbox,
+                                [0, 0, 0],
                                 -1)
             self.selectionMask = cv2.cvtColor(self.selectionMask,
                                               cv2.COLOR_BGR2GRAY)
@@ -636,6 +646,7 @@ class main(object):
 
     def __exit__(self, exec_type, exec_value, traceback):
         cv2.destroyAllWindows()
+        plt.close('all')
 
 
 if __name__ == '__main__':
