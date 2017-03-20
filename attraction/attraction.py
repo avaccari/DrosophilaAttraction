@@ -24,7 +24,7 @@ Version: 0.0.0-alpha
 
 # TODO:
 # - Make sure the detection IS a larva
-# - Handle the larva-target interaction
+# - Handle the larva-target interaction *****
 # - Store heatmap
 # - If the larva is not detected, decide what to do with the various metrics
 #   inf? NAN? 0? don't store it?
@@ -33,8 +33,18 @@ Version: 0.0.0-alpha
 #   the center of another square
 # - random location with about the same distance from the center and calculate
 #   how much time is spend in something the same size
-# - might consider rewinding after initializing the background
 # - save as 10x10 excel with number of frames per cell
+# - calculate distances and speed based on actual size of the arena (ask user
+#   for diameter) *****
+# - Add 0.15 from the target to the computation *****
+# - If it is inside the target, then consider it in. *****
+# - Normalize the percentage axis of the KDE and specify the x for the data so
+#   that you can average them together *****
+# - Scale back the measurements in pixels of the original image *****
+# - Frequency of turns as function of distance from target (curviness of track
+#   or average curvature as function of distance from target. Ratio between
+#   total distance travelled and direct distance between start and end every
+#   so many frames)
 
 
 import argparse
@@ -46,11 +56,11 @@ import pandas as pd
 from backgroundSubtractor import createBackgroundSubtractorAVG
 from skimage import feature as skif
 import sys
+import traceback
 import time
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
-import matplotlib.path as mplpath
 from statsmodels.nonparametric.kde import KDEUnivariate
 
 from userInt import userInt
@@ -63,6 +73,7 @@ class larva(object):
         self.center = None
         self.totalDist = 0
         self.lastDist = 0
+        self.inTarget = False
 
     def updateContour(self, contour):
         self.contour = [contour]
@@ -84,19 +95,32 @@ class region(object):
     def __init__(self, bbox, name=None):
         # The 2 factor is due to the reduction in size before processing should
         # probably be a global setting
-        self.center = np.asarray(bbox[0]) / 2
-        self.size = np.asarray(bbox[1]) / 2
+        self.center = np.asarray(bbox[0]) / 2.
+        self.size = np.asarray(bbox[1]) / 2.
         self.norm = self.size.max()
         self.angle = np.asarray(bbox[2])
         self.bbox = (self.center, self.size, self.angle)
         self.target = None
         self.name = name
 
+        # Evaluate ellipse as polyline
+        self.asPoly = cv2.ellipse2Poly(tuple(self.bbox[0].astype(np.int)),
+                                       tuple(np.round(self.bbox[1] / 2.).astype(np.int)),
+                                       self.bbox[2],
+                                       0, 360, 10)
+
         # Larvae are in regions
         self.larva = larva()  # What if more than one larva in more than one arena?
 
-    def getScaledBBox(self, ratio=1.0):
-        return (self.center, self.size * ratio, self.angle)
+    def getScaledBBox(self, scale=1.0, fix=[0.0, 0.0]):
+        return (self.center, self.size * scale + fix, self.angle)
+
+    def getScaledPoly(self, scale=1.0, fix=[0.0, 0.0]):
+        bbox = self.getScaledBBox(scale, fix)
+        return cv2.ellipse2Poly(tuple(bbox[0].astype(np.int)),
+                                tuple(np.round(bbox[1] / 2.).astype(np.int)),
+                                bbox[2],
+                                0, 360, 10)
 
     def getDistances(self):
         d_ctr = np.inf
@@ -118,7 +142,7 @@ class main(object):
     def __init__(self, fil):
         plt.ion()
 
-       # Instantiate user interface
+        # Instantiate user interface
         ui = userInt()
 
         if fil is None:
@@ -131,6 +155,8 @@ class main(object):
 
         self.mainWindow = basename(self.fil)
         cv2.namedWindow(self.mainWindow)
+
+        self.rewinded = False
 
         self.frameNo = 0
         self.frameHistoryLen = 50
@@ -156,6 +182,9 @@ class main(object):
         self.selectionType = None
 
         self.thresholdRadius = 0.0
+        self.downscaleFrame = True
+        self.frameScale = 2.0
+
 
         # Create an empty pandas dataframe to store the data
         self.data = pd.DataFrame({'FrameNo': [],
@@ -190,6 +219,8 @@ class main(object):
 
         # If we found no contous, bail
         if not contours:
+            if self.arenas[-1].larva.inTarget:  # This uses the last arena
+                return True
             return False
 
         # If we found at least one associate it to a larva and the correct arena
@@ -198,19 +229,24 @@ class main(object):
 
         # Find the correct arena
         for arena in self.arenas:
-            p = mplpath.Path(cv2.boxPoints(arena.bbox))
-            if p.contains_point(larva_center):
+            arena.larva.inTarget = False
+            if cv2.pointPolygonTest(arena.asPoly, tuple(larva_center), False) >= 0:
                 arena.larva.clearContour()
                 arena.larva.updateContour(contours[0])
 
-                # Decide how to handle the target because we only have the
-                # bounding rectangle instead of the ellipse
+                # Check if the larva is in the target
+                if cv2.pointPolygonTest(arena.target.asPoly, tuple(larva_center), True) >= -self.targetPxlDist:
+                    arena.larva.inTarget = True
 
         return True
 
     def preprocessFrame(self):
-        # Pyramid down
-        frame = cv2.pyrDown(self.sourceFrame, borderType=cv2.BORDER_REPLICATE)
+
+        # If user asked to Pyramid down
+        if self.downscaleFrame:
+            frame = cv2.pyrDown(self.sourceFrame, borderType=cv2.BORDER_REPLICATE)
+        else:
+            frame = self.sourceFrame
 
         # Create mask first time around (hugly but necessary because of pyrDown)
         if self.selectionMask is None:
@@ -246,6 +282,13 @@ class main(object):
         # If background subtractor is initialized
         if self.fgbg.isFullyInitialized() is True:
 
+            # Rewind the movie to the first frame
+            if self.rewinded is False:
+                self.vid.goToMs()
+                self.frameNo = 0
+                self.rewinded = True
+                return
+
             # Detect larva in the foreground
             if self.detectLarva(fg) is False:
                 self.processedFrame = self.sourceFrame
@@ -255,15 +298,21 @@ class main(object):
             if self.heatMap is None:
                 self.heatMap = np.zeros_like(self.sourceFrame, dtype=np.float)
 
-            temp = np.zeros_like(self.heatMap)
-            for arena in self.arenas:
-                cv2.drawContours(temp, arena.larva.contour, 0, 1, cv2.FILLED)
-            self.heatMap += temp
+            # If larva is not in target
+            if not self.arenas[-1].larva.inTarget:  # Uses last arena
+                temp = np.zeros_like(self.heatMap)
+                for arena in self.arenas:
+                    cv2.drawContours(temp, arena.larva.contour, 0, 1, cv2.FILLED)
+                self.heatMap += temp
+
+            # Normalize and add heatmap to fame
             heat_norm = cv2.normalize(self.heatMap/self.heatMap.max(),
                                       None,
                                       0, 255,
                                       cv2.NORM_MINMAX, cv2.CV_8UC1)
             heat_color = cv2.applyColorMap(heat_norm, cv2.COLORMAP_HOT)
+
+
             self.processedFrame = cv2.cvtColor(self.sourceFrame,
                                                cv2.COLOR_GRAY2BGR)
             cv2.add(self.processedFrame,
@@ -276,7 +325,7 @@ class main(object):
                 cv2.ellipse(self.processedFrame,
                             arena.bbox,
                             [255, 0, 0],
-                            2)
+                            1)
                 self.drawCross(self.processedFrame,
                                arena.center.astype(np.uint16),
                                color=[255, 0, 0])
@@ -285,26 +334,34 @@ class main(object):
                     cv2.ellipse(self.processedFrame,
                                 arena.target.bbox,
                                 [0, 0, 255],
-                                2)
+                                1)
+                    thickness = 1;
+                    if arena.larva.inTarget:
+                        thickness = -1;
+                    cv2.ellipse(self.processedFrame,
+                                arena.target.getScaledBBox(fix=[self.targetPxlDist, self.targetPxlDist]),
+                                [128, 128, 255],
+                                thickness)
                     self.drawCross(self.processedFrame,
                                    arena.target.center.astype(np.uint16))
 
                 # Add larva contour to original image in green
-                cv2.drawContours(self.processedFrame,
-                                 arena.larva.contour,
-                                 0,
-                                 (0, 255, 0),
-                                 1)
-                if arena.larva.center is not None:
-                    self.drawCross(self.processedFrame,
-                                   arena.larva.center.astype(np.uint16),
-                                   color=[0, 255, 0])
+                if not self.arenas[-1].larva.inTarget:  # Uses last arena
+                    cv2.drawContours(self.processedFrame,
+                                     arena.larva.contour,
+                                     0,
+                                     (0, 255, 0),
+                                     1)
+                    if arena.larva.center is not None:
+                        self.drawCross(self.processedFrame,
+                                       arena.larva.center.astype(np.uint16),
+                                       color=[0, 255, 0])
 
                 # Add special ranges in dark green
                 cv2.ellipse(self.processedFrame,
-                            arena.getScaledBBox(self.thresholdRadius),
+                            arena.getScaledBBox(scale=self.thresholdRadius),
                             [0, 127, 0],
-                            2)
+                            1)
 
 
             # Store data
@@ -600,6 +657,13 @@ class main(object):
     def userParameters(self):
         # Should be changed to allow for user input or various parameters
         self.thresholdRadius = 0.15
+        self.targetPxlDist = 5
+
+        # Ask the user if we should downscale the frames for analysis
+#        self.downscaleFrame = ui.yesNo('Downscale frame size for analysis?');
+        self.downscaleFrame = True
+        self.frameScale = 2.0
+
 
 
     def watch(self, scaleFps):
@@ -673,7 +737,16 @@ if __name__ == '__main__':
             try:
                 m.watch(args.scaleFps)
             except:
-                print sys.exc_info()
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+
+                traceback_details = {'filename': exc_traceback.tb_frame.f_code.co_filename,
+                                     'lineno'  : exc_traceback.tb_lineno,
+                                     'name'    : exc_traceback.tb_frame.f_code.co_name,
+                                     'type'    : exc_type.__name__,
+                                     'message' : exc_value.message}
+
+                del(exc_type, exc_value, exc_traceback)
+                print traceback.format_exc()
 
             # Do you want to analyze another file?
             again = ui.yesNo("Do you want to open another file?")
