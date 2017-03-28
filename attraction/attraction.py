@@ -24,7 +24,6 @@ Version: 0.0.0-alpha
 
 # TODO:
 # - Make sure the detection IS a larva
-# - Handle the larva-target interaction *****
 # - Store heatmap
 # - If the larva is not detected, decide what to do with the various metrics
 #   inf? NAN? 0? don't store it?
@@ -37,7 +36,6 @@ Version: 0.0.0-alpha
 # - calculate distances and speed based on actual size of the arena (ask user
 #   for diameter) *****
 # - Add 0.15 from the target to the computation *****
-# - If it is inside the target, then consider it in. *****
 # - Normalize the percentage axis of the KDE and specify the x for the data so
 #   that you can average them together *****
 # - Scale back the measurements in pixels of the original image *****
@@ -45,6 +43,7 @@ Version: 0.0.0-alpha
 #   or average curvature as function of distance from target. Ratio between
 #   total distance travelled and direct distance between start and end every
 #   so many frames)
+# - Consider linear (or circular) interpolating when outside of the arena
 
 
 import argparse
@@ -185,24 +184,29 @@ class main(object):
         self.downscaleFrame = True
         self.frameScale = 2.0
 
+        self.lastOutFrame = None
+        self.lastOutStored = False
+        self.lastOutData = None
+
 
         # Create an empty pandas dataframe to store the data
-        self.data = pd.DataFrame({'FrameNo': [],
-                                  'FrameTimeMs': [],
-                                  'LarvaPosX': [],
-                                  'LarvaPosY': [],
-                                  'LarvaLastDist': [],
-                                  'LarvaLastVel': [],
-                                  'LarvaTotalDist': [],
-                                  'LarvaPosXNorm': [],
-                                  'LarvaPosYNorm': [],
-                                  'LarvaLastDistNorm': [],
-                                  'LarvaLastVelNorm': [],
-                                  'LarvaTotalDistNorm': [],
-                                  'DistArenaCntrPxl': [],
-                                  'DistTrgtCntrPxl': [],
-                                  'DistArenaCntrNorm': [],
-                                  'DistTrgtCntrNorm': []})
+        self.columns = ['FrameNo',
+                        'FrameTimeMs',
+                        'LarvaPosX',
+                        'LarvaPosY',
+                        'LarvaLastDist',
+                        'LarvaLastVel',
+                        'LarvaTotalDist',
+                        'LarvaPosXNorm',
+                        'LarvaPosYNorm',
+                        'LarvaLastDistNorm',
+                        'LarvaLastVelNorm',
+                        'LarvaTotalDistNorm',
+                        'DistArenaCntrPxl',
+                        'DistTrgtCntrPxl',
+                        'DistArenaCntrNorm',
+                        'DistTrgtCntrNorm']
+        self.data = pd.DataFrame(dict.fromkeys(self.columns, []))
 
     def detectLarva(self, img):
         # Detect edges in the foreground and display
@@ -381,13 +385,13 @@ class main(object):
         d_ctr, d_trg = arena.getDistances()
         l_pos = larva.center
         l_ldist = larva.lastDist
+        l_tdist = larva.totalDist
         try:
             lastDeltaFrame = self.frameNo - self.data.iloc[-1]['FrameNo']
         except IndexError:
             l_lvel = 0
         else:
             l_lvel = l_ldist / lastDeltaFrame
-        l_tdist = larva.totalDist
         d_ctr_n = d_ctr * norm
         d_trg_n = d_trg * norm
         l_pos_n = l_pos * norm
@@ -395,23 +399,98 @@ class main(object):
         l_lvel_n = l_lvel * norm
         l_tdist_n = l_tdist * norm
 
-        self.data = self.data.append({'FrameNo': self.frameNo,
-                                      'FrameTimeMs': time,
-                                      'LarvaPosX': l_pos[0],
-                                      'LarvaPosY': l_pos[1],
-                                      'LarvaLastDist': l_ldist,
-                                      'LarvaLastVel': l_lvel,
-                                      'LarvaTotalDist': l_tdist,
-                                      'LarvaPosXNorm': l_pos_n[0],
-                                      'LarvaPosYNorm': l_pos_n[1],
-                                      'LarvaLastDistNorm': l_ldist_n,
-                                      'LarvaLastVelNorm': l_lvel_n,
-                                      'LarvaTotalDistNorm': l_tdist_n,
-                                      'DistArenaCntrPxl': d_ctr,
-                                      'DistTrgtCntrPxl': d_trg,
-                                      'DistArenaCntrNorm': d_ctr_n,
-                                      'DistTrgtCntrNorm': d_trg_n},
-                                      ignore_index=True)
+        values = [self.frameNo,
+                  time,
+                  l_pos[0],
+                  l_pos[1],
+                  l_ldist,
+                  l_lvel,
+                  l_tdist,
+                  l_pos_n[0],
+                  l_pos_n[1],
+                  l_ldist_n,
+                  l_lvel_n,
+                  l_tdist_n,
+                  d_ctr,
+                  d_trg,
+                  d_ctr_n,
+                  d_trg_n]
+
+        # Store state when entering target
+        if larva.inTarget and not self.lastOutStored:
+            self.lastOutData = [self.frameNo,
+                                time,
+                                l_pos[0],
+                                l_pos[1],
+                                l_ldist,
+                                0.0,  # l_lvel
+                                l_tdist,
+                                0.0,  # l_pos_n[0]
+                                0.0,  # l_pos_n[1]
+                                0.0,  # l_ldist_n
+                                0.0,  # l_lvel_n
+                                0.0,  # l_tdist_n
+                                d_ctr,
+                                d_trg,
+                                0.0,  # d_ctr_n
+                                0.0]  # d_trg_n
+            self.lastOutStored = True
+
+        # Evaluate intermediate states when leaving the target
+        if not larva.inTarget and self.lastOutStored:
+            currentData = [self.frameNo,
+                           time,
+                           l_pos[0],
+                           l_pos[1],
+                           l_ldist,
+                           0.0,  # l_lvel
+                           l_tdist,
+                           0.0,  # l_pos_n[0]
+                           0.0,  # l_pos_n[1]
+                           0.0,  # l_ldist_n
+                           0.0,  # l_lvel_n
+                           0.0,  # l_tdist_n
+                           d_ctr,
+                           d_trg,
+                           0.0,  # d_ctr_n
+                           0.0]  # d_trg_n
+
+            # Linear interpolate missing data
+            interp = np.array([np.linspace(i, j, self.frameNo - self.lastOutData[0] + 1) for i, j in zip(self.lastOutData, currentData)])
+
+            # Calculate derived measures
+            interp[5] = interp[4]  # l_lvel
+            interp[[7, 8, 9, 10, 11, 14, 15]] = interp[[2, 3, 4, 5, 6, 12, 13]] * norm
+
+            # Append data to existing dataframe
+            self.data = self.data.append(pd.DataFrame(dict(zip(self.columns, interp))),
+                                         ignore_index=True)
+            self.lastOutStored = False
+            return
+
+
+
+        # If larva not in target, store data
+        if not larva.inTarget:
+            self.data = self.data.append(dict(zip(self.columns, values)),
+                                         ignore_index=True)
+#            self.data = self.data.append({'FrameNo': self.frameNo,
+#                                          'FrameTimeMs': time,
+#                                          'LarvaPosX': l_pos[0],
+#                                          'LarvaPosY': l_pos[1],
+#                                          'LarvaLastDist': l_ldist,
+#                                          'LarvaLastVel': l_lvel,
+#                                          'LarvaTotalDist': l_tdist,
+#                                          'LarvaPosXNorm': l_pos_n[0],
+#                                          'LarvaPosYNorm': l_pos_n[1],
+#                                          'LarvaLastDistNorm': l_ldist_n,
+#                                          'LarvaLastVelNorm': l_lvel_n,
+#                                          'LarvaTotalDistNorm': l_tdist_n,
+#                                          'DistArenaCntrPxl': d_ctr,
+#                                          'DistTrgtCntrPxl': d_trg,
+#                                          'DistArenaCntrNorm': d_ctr_n,
+#                                          'DistTrgtCntrNorm': d_trg_n},
+#                                          ignore_index=True)
 
 
     def annotateFrame(self):
