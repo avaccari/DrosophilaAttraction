@@ -24,10 +24,8 @@ Version: 0.0.0-alpha
 
 # TODO:
 # - Make sure the detection IS a larva
-# - Store heatmap
 # - If the larva is not detected, decide what to do with the various metrics
 #   inf? NAN? 0? don't store it?
-# - squares 1cm^2 count frames when it is inside
 # - center of arena is the center of a square and the center of the target is
 #   the center of another square
 # - random location with about the same distance from the center and calculate
@@ -35,7 +33,6 @@ Version: 0.0.0-alpha
 # - save as 10x10 excel with number of frames per cell
 # - calculate distances and speed based on actual size of the arena (ask user
 #   for diameter) *****
-# - Add 0.15 from the target to the computation *****
 # - Normalize the percentage axis of the KDE and specify the x for the data so
 #   that you can average them together *****
 # - Scale back the measurements in pixels of the original image *****
@@ -44,6 +41,9 @@ Version: 0.0.0-alpha
 #   total distance travelled and direct distance between start and end every
 #   so many frames)
 # - Consider linear (or circular) interpolating when outside of the arena
+# - Apply perspective or affine transform to heat map to transform into 10cm
+#   circle (100x100) and then evaluate 10x10 grid centered in origin
+# - Fix the normalization of the KDE
 
 
 import argparse
@@ -51,7 +51,6 @@ import cv2
 from os.path import basename, splitext
 import numpy as np
 import pandas as pd
-#from backgroundSubtractor import createBackgroundSubtractorRG
 from backgroundSubtractor import createBackgroundSubtractorAVG
 from skimage import feature as skif
 import sys
@@ -61,6 +60,7 @@ import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from statsmodels.nonparametric.kde import KDEUnivariate
+from scipy.spatial import distance as dist
 
 from userInt import userInt
 from cvVideo import video
@@ -101,12 +101,33 @@ class region(object):
         self.bbox = (self.center, self.size, self.angle)
         self.target = None
         self.name = name
+        self.rotation = None
 
         # Evaluate ellipse as polyline
         self.asPoly = cv2.ellipse2Poly(tuple(self.bbox[0].astype(np.int)),
                                        tuple(np.round(self.bbox[1] / 2.).astype(np.int)),
                                        self.bbox[2],
                                        0, 360, 10)
+
+        # Get corners of rotated rectangle and sort clock-wise
+        corners = cv2.boxPoints(self.bbox).astype(np.float32)
+        srt = corners[np.argsort(corners[:, 0]), :]
+        leftMost = srt[:2, :]
+        rightMost = srt[2:, :]
+        leftMost = leftMost[np.argsort(leftMost[:, 1]), :]
+        (tl, bl) = leftMost
+        D = dist.cdist(tl[np.newaxis], rightMost, "euclidean")[0]
+        (br, tr) = rightMost[np.argsort(D)[::-1], :]
+        self.corners = np.array([tl, tr, br, bl], dtype="float32")
+
+        # Define perspective transformation to standard 100x100
+        self.stdSize = (100, 100)  # (X, Y)
+        self.stdBox = np.array([[0, 0],
+                                [self.stdSize[0], 0],
+                                list(self.stdSize),
+                                [0, self.stdSize[1]]],
+                               dtype=np.float32)
+        self.perspective = cv2.getPerspectiveTransform(self.corners, self.stdBox)
 
         # Larvae are in regions
         self.larva = larva()  # What if more than one larva in more than one arena?
@@ -181,8 +202,8 @@ class main(object):
         self.selectionType = None
 
         self.thresholdRadius = 0.0
-        self.downscaleFrame = True
-        self.frameScale = 2.0
+        self.downscaleFrame = False
+        self.frameScale = 1.0
 
         self.lastOutFrame = None
         self.lastOutStored = False
@@ -249,8 +270,10 @@ class main(object):
         # If user asked to Pyramid down
         if self.downscaleFrame:
             frame = cv2.pyrDown(self.sourceFrame, borderType=cv2.BORDER_REPLICATE)
+            self.frameScale = 2.0
         else:
             frame = self.sourceFrame
+            self.frameScale = 1.0
 
         # Create mask first time around (hugly but necessary because of pyrDown)
         if self.selectionMask is None:
@@ -330,6 +353,7 @@ class main(object):
                             arena.bbox,
                             [255, 0, 0],
                             1)
+                self.drawBox(self.processedFrame, arena.corners)
                 self.drawCross(self.processedFrame,
                                arena.center.astype(np.uint16),
                                color=[255, 0, 0])
@@ -360,6 +384,10 @@ class main(object):
                         self.drawCross(self.processedFrame,
                                        arena.larva.center.astype(np.uint16),
                                        color=[0, 255, 0])
+
+                # Add larva path this far
+                for coo in np.round(self.data[['LarvaPosX', 'LarvaPosY']].values).astype(np.int):
+                    self.processedFrame[coo[1], coo[0], :] = (0, 255 ,0)
 
                 # Add special ranges in dark green
                 cv2.ellipse(self.processedFrame,
@@ -474,23 +502,6 @@ class main(object):
         if not larva.inTarget:
             self.data = self.data.append(dict(zip(self.columns, values)),
                                          ignore_index=True)
-#            self.data = self.data.append({'FrameNo': self.frameNo,
-#                                          'FrameTimeMs': time,
-#                                          'LarvaPosX': l_pos[0],
-#                                          'LarvaPosY': l_pos[1],
-#                                          'LarvaLastDist': l_ldist,
-#                                          'LarvaLastVel': l_lvel,
-#                                          'LarvaTotalDist': l_tdist,
-#                                          'LarvaPosXNorm': l_pos_n[0],
-#                                          'LarvaPosYNorm': l_pos_n[1],
-#                                          'LarvaLastDistNorm': l_ldist_n,
-#                                          'LarvaLastVelNorm': l_lvel_n,
-#                                          'LarvaTotalDistNorm': l_tdist_n,
-#                                          'DistArenaCntrPxl': d_ctr,
-#                                          'DistTrgtCntrPxl': d_trg,
-#                                          'DistArenaCntrNorm': d_ctr_n,
-#                                          'DistTrgtCntrNorm': d_trg_n},
-#                                          ignore_index=True)
 
 
     def annotateFrame(self):
@@ -521,6 +532,13 @@ class main(object):
         sz = int(round(size / 2))
         cv2.line(window, (x - sz, y), (x + sz, y), color)
         cv2.line(window, (x, y - sz), (x, y + sz), color)
+
+    def drawBox(self, window, corners, color=[255, 0, 0], thickness=1):
+        cv2.line(window, tuple(corners[0]), tuple(corners[1]), color=color, thickness=thickness)
+        cv2.line(window, tuple(corners[1]), tuple(corners[2]), color=color, thickness=thickness)
+        cv2.line(window, tuple(corners[2]), tuple(corners[3]), color=color, thickness=thickness)
+        cv2.line(window, tuple(corners[3]), tuple(corners[0]), color=color, thickness=thickness)
+
 
     def selectRegions(self):
         # Pop-up a new window to select regions of interest
@@ -603,6 +621,10 @@ class main(object):
                     self.selectionMode = False
 
     def processData(self):
+        # Default arena
+        arena = self.arenas[-1]  # Assumes a single arena
+
+        # Extract data
         dst_arena = self.data['DistArenaCntrNorm'].values
         dst_trgt = self.data['DistTrgtCntrNorm'].values
 
@@ -645,11 +667,10 @@ class main(object):
         plt.xlabel('Normalized distance')
         plt.ylabel('Probability')
         plt.title("KDE of distance from arena's (blue) and target's (red) centers")
-        plt.show()
 
         # Plot distance vs time and limits
-        frames = self.data['FrameNo'].values
         plt.figure()
+        frames = self.data['FrameNo'].values
         plt.scatter(frames, dst_arena, color='blue')
         plt.scatter(frames, dst_trgt, color='red')
         plt.plot((0, frames.max()),
@@ -659,6 +680,57 @@ class main(object):
         plt.xlabel('Frame number')
         plt.ylabel('Normalized distance')
         plt.title("Normalized distance from arena's (blue) and target's (red) centers")
+
+        # Show and save original heatmap
+        plt.figure()
+        heatNorm = self.heatMap / self.frameNo
+        plt.imshow(heatNorm)
+        plt.title('Original heatmap')
+        plt.imsave(splitext(self.fil)[0] + time.strftime('_HM_%Y%m%d%H%M%S') + '.png',
+                   heatNorm,
+                   cmap=plt.cm.hot,
+                   format='png')
+
+        # Show and save normalized, perspective-corrected, and rotated heatmap
+        plt.figure()
+        # Standardize the image to the template (affine transform)
+        stdHeat = cv2.warpPerspective(self.heatMap, arena.perspective, arena.stdSize)
+        # Evaluate the angular position of the target with respect to the center
+        ctrs = np.vstack((arena.center, arena.target.center))
+        perCtrs = cv2.perspectiveTransform(np.array([ctrs]), arena.perspective).squeeze()
+        trgtCoo = perCtrs[1] - perCtrs[0]
+        trgtCoo[1] = -trgtCoo[1]
+        trgtAngle = np.arctan2(trgtCoo[1], trgtCoo[0]) - np.pi/2
+        # Define the rotation required to move the target up
+        rot = cv2.getRotationMatrix2D(tuple(perCtrs[0]), -np.rad2deg(trgtAngle), 1.0)
+        # Apply the transformation
+        stdHeat = cv2.warpAffine(stdHeat, rot, arena.stdSize)
+        rotCtrs = cv2.transform(perCtrs.reshape((len(perCtrs), 1, 2)), rot).reshape((len(perCtrs), 2))
+        # Normalize by the number of frames and show
+        stdHeat /= self.frameNo
+        plt.imshow(stdHeat)
+        plt.scatter(rotCtrs[:, 0], rotCtrs[:, 1])
+        plt.title('Standardized heatmap')
+        plt.imsave(splitext(self.fil)[0] + time.strftime('_HMStd_%Y%m%d%H%M%S') + '.png',
+                   stdHeat,
+                   cmap=plt.cm.hot,
+                   format='png')
+
+        # Evaluate 10x10 grid heatmap
+        coo = self.data[['LarvaPosX', 'LarvaPosY']].values
+        coo = cv2.perspectiveTransform(np.array([coo]), arena.perspective).squeeze()
+        coo = cv2.transform(coo.reshape((len(coo), 1, 2)), rot).reshape((len(coo), 2))
+        coo = np.round(coo/10).astype(np.int)
+        heat10 = np.zeros((11, 11))
+        # Count frames within each box
+        for c in coo:
+            c = (c[1], c[0])  # (x, y) -> (r, c)
+            heat10[c] += 1
+        heat10 /= self.frameNo  # Normalize by the frame number
+        plt.figure()
+        plt.imshow(heat10)
+        plt.title('Rasterized and normalized heatmap')
+
         plt.show()
 
         # Create KDE dataframe
@@ -668,10 +740,10 @@ class main(object):
                                 'DistTrgtCntrProb': d_trgt_kde.density})
 
         # Create assay metadata dataframe
-        arena_size = self.arenas[-1].size * 2;
-        arena_cntr = self.arenas[-1].center * 2;
-        target_size = self.arenas[-1].target.size * 2;
-        target_cntr = self.arenas[-1].target.center * 2;
+        arena_size = arena.size * self.frameScale;
+        arena_cntr = arena.center * self.frameScale;
+        target_size = arena.target.size * self.frameScale;
+        target_cntr = arena.target.center * self.frameScale;
         assyMetadata = pd.DataFrame({'ArenaWidth': arena_size[0],
                                      'ArenaHeight': arena_size[1],
                                      'ArenaCntrX': arena_cntr[0],
@@ -679,29 +751,16 @@ class main(object):
                                      'TargerWidth': target_size[0],
                                      'TargetHeight': target_size[1],
                                      'TargetCntrX': target_cntr[0],
-                                     'TargetCntrY': target_cntr[1]},
+                                     'TargetCntrY': target_cntr[1],
+                                     'TotalFrames': self.frameNo},
                                      index=[0])
 
         # Create and save Excel workbook
         writer = pd.ExcelWriter(splitext(self.fil)[0] + time.strftime('_%Y%m%d%H%M%S') + '.xlsx')
         self.data.to_excel(writer,
                            'Raw data',
-                           columns=['FrameNo',
-                                    'FrameTimeMs',
-                                    'LarvaPosX',
-                                    'LarvaPosY',
-                                    'LarvaLastDist',
-                                    'LarvaLastVel',
-                                    'LarvaTotalDist',
-                                    'LarvaPosXNorm',
-                                    'LarvaPosYNorm',
-                                    'LarvaLastDistNorm',
-                                    'LarvaLastVelNorm',
-                                    'LarvaTotalDistNorm',
-                                    'DistArenaCntrPxl',
-                                    'DistTrgtCntrPxl',
-                                    'DistArenaCntrNorm',
-                                    'DistTrgtCntrNorm'])
+                           columns=self.columns)
+
         kdeData.to_excel(writer,
                          'KDE data',
                          columns=['DistArenaCntrNorm',
@@ -728,7 +787,8 @@ class main(object):
                                        'TargerWidth',
                                        'TargetHeight',
                                        'TargetCntrX',
-                                       'TargetCntrY'])
+                                       'TargetCntrY',
+                                       'TotalFrames'])
 
         writer.save()
 
@@ -741,7 +801,6 @@ class main(object):
         # Ask the user if we should downscale the frames for analysis
 #        self.downscaleFrame = ui.yesNo('Downscale frame size for analysis?');
         self.downscaleFrame = True
-        self.frameScale = 2.0
 
 
 
