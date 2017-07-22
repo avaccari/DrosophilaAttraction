@@ -4,6 +4,31 @@ Created on Fri Sep  25 19:42:41 2015
 Name:    track.py
 Purpose: Track Drosphila larvae and analyze bahavior.
 Author:  Andrea Vaccari (av9g@virginia.edu)
+
+If you use our software, please cite our work:
+    <insert citation here>
+
+MIT License
+
+Copyright (c) 2017 Andrea Vaccari
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 """
 
 """
@@ -18,8 +43,12 @@ TODO:
 - evaluate average period
 - evaluate displacements for each period
 - evaluate average displacement
+- cross-correlation could be used to quantify phase difference between tracked
+  larvae motion
+- can we measure contraction of larvae if the user select both head and tail?
+- can we correlate motion of larvae with the nearby meniscus? Can we image
+  food+larvae vs air? (volume of meniscus vs time?)
 """
-
 
 import cv2
 import argparse

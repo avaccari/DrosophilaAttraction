@@ -30,7 +30,6 @@ Version: 0.0.0-alpha
 #   the center of another square
 # - random location with about the same distance from the center and calculate
 #   how much time is spend in something the same size
-# - save as 10x10 excel with number of frames per cell
 # - calculate distances and speed based on actual size of the arena (ask user
 #   for diameter) *****
 # - Normalize the percentage axis of the KDE and specify the x for the data so
@@ -40,11 +39,15 @@ Version: 0.0.0-alpha
 #   or average curvature as function of distance from target. Ratio between
 #   total distance travelled and direct distance between start and end every
 #   so many frames)
-# - Consider linear (or circular) interpolating when outside of the arena
-# - Apply perspective or affine transform to heat map to transform into 10cm
-#   circle (100x100) and then evaluate 10x10 grid centered in origin
-# - Fix the normalization of the KDE
-
+# - Fix the normalization of the KDE (consider using the scikit-learn kde)
+# - Change the various normalizations from the total number of frames in the
+#   movie to the total number of frames in which the larva was detected and add
+#   the number of frames to the metadata file
+# - Check to number type of the 10x10 count frame
+# - Check what happens with 10x10 cell 7F when using video '1602012_CStop...'
+# - Save also as 200x200
+# - Create script to average a bunch of heatmaps
+# - See if you can store the number of active frames within the heatmap
 
 import argparse
 import cv2
@@ -709,14 +712,14 @@ class main(object):
         # Normalize by the number of frames and show
         stdHeat /= self.frameNo
         plt.imshow(stdHeat)
-        plt.scatter(rotCtrs[:, 0], rotCtrs[:, 1])
+        plt.scatter(rotCtrs[:, 0], rotCtrs[:, 1], color='red')
         plt.title('Standardized heatmap')
         plt.imsave(splitext(self.fil)[0] + time.strftime('_HMStd_%Y%m%d%H%M%S') + '.png',
                    stdHeat,
                    cmap=plt.cm.hot,
                    format='png')
 
-        # Evaluate 10x10 grid heatmap
+        # Evaluate 10x10 grid normalized heatmap
         coo = self.data[['LarvaPosX', 'LarvaPosY']].values
         coo = cv2.perspectiveTransform(np.array([coo]), arena.perspective).squeeze()
         coo = cv2.transform(coo.reshape((len(coo), 1, 2)), rot).reshape((len(coo), 2))
@@ -727,10 +730,12 @@ class main(object):
             c = (c[1], c[0])  # (x, y) -> (r, c)
             heat10[c] += 1
         heat10 /= self.frameNo  # Normalize by the frame number
+        heat10Data = pd.DataFrame(heat10)  # Create a dataframe
         plt.figure()
         plt.imshow(heat10)
         plt.title('Rasterized and normalized heatmap')
 
+        # Show the plots
         plt.show()
 
         # Create KDE dataframe
@@ -789,6 +794,11 @@ class main(object):
                                        'TargetCntrX',
                                        'TargetCntrY',
                                        'TotalFrames'])
+
+        heat10Data.to_excel(writer,
+                            'Heatmap10',
+                            header=False,
+                            index=False)
 
         writer.save()
 
