@@ -193,6 +193,9 @@ class main(object):
         self.lastProcFrame = None
         self.workingFrame = None
 
+        self.kdeSupportStep = 0.01
+        self.kdeSupport = np.arange(0, 1, self.kdeSupportStep)
+
         self.heatMap = None
 
         self.selectionWindow = 'Selection Window'
@@ -655,15 +658,17 @@ class main(object):
         # Evaluate KDE of normalized distance from center of arena
         d_arena_kde = KDEUnivariate(dst_arena)
         d_arena_kde.fit()
+        d_arena_kde_density = d_arena_kde.evaluate(self.kdeSupport) * self.kdeSupportStep
 
         # Evaluate KDE of normalized distance from center of target
         d_trgt_kde = KDEUnivariate(dst_trgt)
         d_trgt_kde.fit()
+        d_trgt_kde_density = d_trgt_kde.evaluate(self.kdeSupport) * self.kdeSupportStep
 
         # Plot KDEs
         plt.figure()
-        plt.plot(d_arena_kde.support, d_arena_kde.density, color='blue')
-        plt.plot(d_trgt_kde.support, d_trgt_kde.density, color='red')
+        plt.plot(self.kdeSupport, d_arena_kde_density, color='blue')
+        plt.plot(self.kdeSupport, d_trgt_kde_density, color='red')
         plt.plot((self.thresholdRadius, self.thresholdRadius),
                  (0, plt.ylim()[1]),
                  color = 'green')
@@ -739,10 +744,10 @@ class main(object):
         plt.show()
 
         # Create KDE dataframe
-        kdeData = pd.DataFrame({'DistArenaCntrNorm': d_arena_kde.support,
-                                'DistArenaCntrProb': d_arena_kde.density,
-                                'DistTrgtCntrNorm': d_trgt_kde.support,
-                                'DistTrgtCntrProb': d_trgt_kde.density})
+        kdeData = pd.DataFrame({'DistArenaCntrNorm': self.kdeSupport,
+                                'DistArenaCntrProb': d_arena_kde_density,
+                                'DistTrgtCntrNorm': self.kdeSupport,
+                                'DistTrgtCntrProb': d_trgt_kde_density})
 
         # Create assay metadata dataframe
         arena_size = arena.size * self.frameScale;
