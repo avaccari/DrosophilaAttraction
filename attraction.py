@@ -32,19 +32,11 @@ Version: 0.0.0-alpha
 #   how much time is spend in something the same size
 # - calculate distances and speed based on actual size of the arena (ask user
 #   for diameter) *****
-# - Normalize the percentage axis of the KDE and specify the x for the data so
-#   that you can average them together *****
 # - Scale back the measurements in pixels of the original image *****
 # - Frequency of turns as function of distance from target (curviness of track
 #   or average curvature as function of distance from target. Ratio between
 #   total distance travelled and direct distance between start and end every
 #   so many frames)
-# - Fix the normalization of the KDE (consider using the scikit-learn kde)
-# - Change the various normalizations from the total number of frames in the
-#   movie to the total number of frames in which the larva was detected and add
-#   the number of frames to the metadata file
-# - Check to number type of the 10x10 count frame
-# - Check what happens with 10x10 cell 7F when using video '1602012_CStop...'
 # - Save also as 200x200
 # - Create script to average a bunch of heatmaps
 # - See if you can store the number of active frames within the heatmap
@@ -59,14 +51,15 @@ from skimage import feature as skif
 import sys
 import traceback
 import time
-import matplotlib
-matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from statsmodels.nonparametric.kde import KDEUnivariate
 from scipy.spatial import distance as dist
 
 from userInt import userInt
 from cvVideo import video
+
+import matplotlib
+matplotlib.use('TkAgg')
 
 
 class larva(object):
@@ -182,6 +175,7 @@ class main(object):
         self.rewinded = False
 
         self.frameNo = 0
+        self.frameDet = 0
         self.frameHistoryLen = 50
         self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
@@ -218,6 +212,7 @@ class main(object):
 
         # Create an empty pandas dataframe to store the data
         self.columns = ['FrameNo',
+                        'OrigFrameNo',
                         'FrameTimeMs',
                         'LarvaPosX',
                         'LarvaPosY',
@@ -327,6 +322,9 @@ class main(object):
                 self.processedFrame = self.sourceFrame
                 return
 
+            # Count frames where larva was detected
+            self.frameDet += 1
+
             # Create heatmap and add to original image in HOT colormap
             if self.heatMap is None:
                 self.heatMap = np.zeros_like(self.sourceFrame, dtype=np.float)
@@ -421,7 +419,7 @@ class main(object):
         l_ldist = larva.lastDist
         l_tdist = larva.totalDist
         try:
-            lastDeltaFrame = self.frameNo - self.data.iloc[-1]['FrameNo']
+            lastDeltaFrame = self.frameNo - self.data.iloc[-1]['OrigFrameNo']
         except IndexError:
             l_lvel = 0
         else:
@@ -433,7 +431,8 @@ class main(object):
         l_lvel_n = l_lvel * norm
         l_tdist_n = l_tdist * norm
 
-        values = [self.frameNo,
+        values = [self.frameDet,
+                  self.frameNo,
                   time,
                   l_pos[0],
                   l_pos[1],
@@ -452,7 +451,8 @@ class main(object):
 
         # Store state when entering target
         if larva.inTarget and not self.lastOutStored:
-            self.lastOutData = [self.frameNo,
+            self.lastOutData = [self.frameDet,
+                                self.frameNo,
                                 time,
                                 l_pos[0],
                                 l_pos[1],
@@ -472,7 +472,8 @@ class main(object):
 
         # Evaluate intermediate states when leaving the target
         if not larva.inTarget and self.lastOutStored:
-            currentData = [self.frameNo,
+            currentData = [self.frameDet,
+                           self.frameNo,
                            time,
                            l_pos[0],
                            l_pos[1],
@@ -691,7 +692,7 @@ class main(object):
 
         # Show and save original heatmap
         plt.figure()
-        heatNorm = self.heatMap / self.frameNo
+        heatNorm = self.heatMap / self.frameDet
         plt.imshow(heatNorm)
         plt.title('Original heatmap')
         plt.imsave(splitext(self.fil)[0] + time.strftime('_HM_%Y%m%d%H%M%S') + '.png',
@@ -715,12 +716,28 @@ class main(object):
         stdHeat = cv2.warpAffine(stdHeat, rot, arena.stdSize)
         rotCtrs = cv2.transform(perCtrs.reshape((len(perCtrs), 1, 2)), rot).reshape((len(perCtrs), 2))
         # Normalize by the number of frames and show
-        stdHeat /= self.frameNo
+        stdHeat /= self.frameDet
         plt.imshow(stdHeat)
+
+        # Add markers for center and target center
         plt.scatter(rotCtrs[:, 0], rotCtrs[:, 1], color='red')
         plt.title('Standardized heatmap')
         plt.imsave(splitext(self.fil)[0] + time.strftime('_HMStd_%Y%m%d%H%M%S') + '.png',
                    stdHeat,
+                   cmap=plt.cm.hot,
+                   format='png')
+
+        # Generate a heatmap with target and center marked and save
+        mrkdHeat = stdHeat.copy()
+        (y0, x0) = rotCtrs[0].astype(int)
+        (y1, x1) = rotCtrs[1].astype(int)
+        val = np.max(stdHeat)
+        mrkdHeat[x0 - 1:x0 + 2, y0] = val
+        mrkdHeat[x0, y0 - 1:y0 + 2] = val
+        mrkdHeat[x1 - 1:x1 + 2, y1] = val
+        mrkdHeat[x1, y1 - 1:y1 + 2] = val
+        plt.imsave(splitext(self.fil)[0] + time.strftime('_HMMrkd_%Y%m%d%H%M%S') + '.png',
+                   mrkdHeat,
                    cmap=plt.cm.hot,
                    format='png')
 
@@ -734,7 +751,7 @@ class main(object):
         for c in coo:
             c = (c[1], c[0])  # (x, y) -> (r, c)
             heat10[c] += 1
-        heat10 /= self.frameNo  # Normalize by the frame number
+        heat10 /= self.frameDet  # Normalize by the frame number
         heat10Data = pd.DataFrame(heat10)  # Create a dataframe
         plt.figure()
         plt.imshow(heat10)
@@ -762,7 +779,8 @@ class main(object):
                                      'TargetHeight': target_size[1],
                                      'TargetCntrX': target_cntr[0],
                                      'TargetCntrY': target_cntr[1],
-                                     'TotalFrames': self.frameNo},
+                                     'TotalFrames': self.frameDet,
+                                     'TotalOrigFrames': self.frameNo},
                                      index=[0])
 
         # Create and save Excel workbook
@@ -798,7 +816,8 @@ class main(object):
                                        'TargetHeight',
                                        'TargetCntrX',
                                        'TargetCntrY',
-                                       'TotalFrames'])
+                                       'TotalFrames',
+                                       'TotalOrigFrames'])
 
         heat10Data.to_excel(writer,
                             'Heatmap10',
@@ -854,6 +873,7 @@ class main(object):
                     self.processFrame()
                     self.showFrame(self.mainWindow, self.processedFrame)
 
+                # Increment total number of frames
                 self.frameNo += 1
 
             self.processData()
