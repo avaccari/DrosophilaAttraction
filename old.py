@@ -1,24 +1,25 @@
-#!/usr/local/bin/python
+# -*- coding: utf-8 -*-
 """
 Created on Tue Nov 17 07:29:54 2015
 Name:    attraction.py
 Purpose: Analyze larva motion within a Pitri dish
-Author:  Andrea Vaccari (avaccari@middlebury.edu)
+Author:  Andrea Vaccari (av9g@virginia.edu)
+Version: 0.0.0-alpha
 
-Copyright (c) 2018 Andrea Vaccari
+    Copyright (C) Tue Nov 17 07:29:54 2015  Andrea Vaccari
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 # TODO:
@@ -50,6 +51,7 @@ from skimage import feature as skif
 import sys
 import traceback
 import time
+import matplotlib.pyplot as plt
 from statsmodels.nonparametric.kde import KDEUnivariate
 from scipy.spatial import distance as dist
 
@@ -58,7 +60,6 @@ from cvVideo import video
 
 import matplotlib
 matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
 
 
 class larva(object):
