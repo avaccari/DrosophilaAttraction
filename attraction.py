@@ -5,7 +5,27 @@ Name:    attraction.py
 Purpose: Analyze larva motion within a Pitri dish
 Author:  Andrea Vaccari (avaccari@middlebury.edu)
 
-If you use our software, please cite our work:
+If you use our software, please cite our works:
+
+@article{dombrovski_cooperative_2017,
+	title = {Cooperative {Behavior} {Emerges} among {Drosophila} {Larvae}},
+	volume = {27},
+	issn = {0960-9822},
+	url = {https://www.cell.com/current-biology/abstract/S0960-9822(17)30958-2},
+	doi = {10.1016/j.cub.2017.07.054},
+	language = {English},
+	number = {18},
+	urldate = {2019-07-17},
+	journal = {Current Biology},
+	author = {Dombrovski, Mark and Poussard, Leanne and Moalem, Kamilia and Kmecova, Lucia and Hogan, Nic and Schott, Elisabeth and Vaccari, Andrea and Acton, Scott and Condron, Barry},
+	month = sep,
+	year = {2017},
+	pmid = {28918946},
+	keywords = {vision, behavior, cooperation, Drosophila, learning},
+	pages = {2821--2826.e2},
+	annote = {doi: 10.1016/j.cub.2017.07.054},
+}
+
 @article{dombrovski_plastic_2019,
 	title = {A {Plastic} {Visual} {Pathway} {Regulates} {Cooperative} {Behavior} in {Drosophila} {Larvae}},
 	volume = {29},
@@ -22,24 +42,6 @@ If you use our software, please cite our work:
 	pmid = {31130457},
 	pages = {1866--1876.e5},
 }
-@article{dombrovski_cooperative_2017,
-	title = {Cooperative {Behavior} {Emerges} among {Drosophila} {Larvae}},
-	volume = {27},
-	issn = {0960-9822},
-	url = {https://www.cell.com/current-biology/abstract/S0960-9822(17)30958-2},
-	doi = {10.1016/j.cub.2017.07.054},
-	language = {English},
-	number = {18},
-	urldate = {2019-07-17},
-	journal = {Current Biology},
-	author = {Dombrovski, Mark and Poussard, Leanne and Moalem, Kamilia and Kmecova, Lucia and Hogan, Nic and Schott, Elisabeth and Vaccari, Andrea and Acton, Scott and Condron, Barry},
-	month = sep,
-	year = {2017},
-	pmid = {28918946},
-	keywords = {behavior, cooperation, Drosophila, learning, vision},
-	pages = {2821--2826.e2},
-}
-
 
 Copyright (c) 2018 Andrea Vaccari
 
